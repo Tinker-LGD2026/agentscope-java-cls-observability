@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.tinkerlgd2026</groupId>
+    <artifactId>agentscope-cls-observability-parent</artifactId>
+    <version>0.1.0</version>
+    <packaging>pom</packaging>
+
+    <name>AgentScope Java CLS Observability</name>
+    <description>CLS Agent Trace observability middleware for AgentScope Java</description>
+    <url>https://github.com/Tinker-LGD2026/agentscope-java-cls-observability</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>Tinker-LGD2026</id>
+            <name>Tinker-LGD2026 contributors</name>
+            <url>https://github.com/Tinker-LGD2026</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/Tinker-LGD2026/agentscope-java-cls-observability.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/Tinker-LGD2026/agentscope-java-cls-observability.git</developerConnection>
+        <url>https://github.com/Tinker-LGD2026/agentscope-java-cls-observability</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <modules>
+        <module>agentscope-cls-observability-sdk</module>
+        <module>demo</module>
+    </modules>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+        <agentscope.version>2.0.3</agentscope.version>
+        <opentelemetry.version>1.62.0</opentelemetry.version>
+        <opentelemetry.instrumentation.version>2.28.0-alpha</opentelemetry.instrumentation.version>
+        <jackson.version>2.21.5</jackson.version>
+        <cls.sdk.version>1.0.17</cls.sdk.version>
+        <lz4.version>1.11.1</lz4.version>
+        <junit.version>6.0.2</junit.version>
+        <assertj.version>3.27.7</assertj.version>
+        <slf4j.version>2.0.17</slf4j.version>
+        <jspecify.version>1.0.1</jspecify.version>
+        <jsr305.version>3.0.2</jsr305.version>
+        <kotlin.version>2.2.21</kotlin.version>
+        <maven.enforcer.version>3.6.2</maven.enforcer.version>
+        <maven.source.version>3.4.0</maven.source.version>
+        <maven.javadoc.version>3.12.0</maven.javadoc.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
+        <project.build.outputTimestamp>2026-09-10T00:00:00Z</project.build.outputTimestamp>
+        <exec.mainClass>io.github.tinkerlgd2026.agentscope.cls.demo.DemoApplication</exec.mainClass>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-core</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-extensions-model-openai</artifactId>
+                <version>${agentscope.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-reactor-3.1</artifactId>
+                <version>${opentelemetry.instrumentation.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Keep AgentScope's BOM after the security-pinned OTel/Jackson BOMs: Maven uses
+                 the first imported management entry when BOMs overlap. -->
+            <dependency>
+                <groupId>io.agentscope</groupId>
+                <artifactId>agentscope-dependencies-bom</artifactId>
+                <version>${agentscope.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.tencentcloudapi.cls</groupId>
+                <artifactId>tencentcloud-cls-sdk-java</artifactId>
+                <version>${cls.sdk.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>at.yawk.lz4</groupId>
+                <artifactId>lz4-java</artifactId>
+                <version>${lz4.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <version>${assertj.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>${jspecify.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.14.1</version>
+                    <configuration>
+                        <release>${maven.compiler.release}</release>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.5.4</version>
+                    <configuration>
+                        <useModulePath>false</useModulePath>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.5.1</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven.enforcer.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-build-environment</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[17,)</version>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <version>[3.9,)</version>
+                                </requireMavenVersion>
+                                <dependencyConvergence>
+                                    <excludedScopes>
+                                        <excludedScope>test</excludedScope>
+                                        <excludedScope>provided</excludedScope>
+                                    </excludedScopes>
+                                    <excludes>
+                                        <!-- OTel instrumentation metadata carries stable semconv
+                                             plus a newer test-only edge from its incubating
+                                             annotations module. The published runtime tree resolves
+                                             the stable artifact selected by the instrumentation BOM. -->
+                                        <exclude>io.opentelemetry.semconv:opentelemetry-semconv</exclude>
+                                    </excludes>
+                                </dependencyConvergence>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                    <mainClass>${exec.mainClass}</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

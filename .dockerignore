@@ -1,0 +1,8 @@
+# Default deny: only the reviewed runtime JAR and Dockerfile enter BuildKit.
+**
+
+!dist/
+!dist/app.jar
+!deploy/
+!deploy/docker/
+!deploy/docker/Dockerfile.example

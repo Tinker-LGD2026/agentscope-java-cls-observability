@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic credential shapes used by sanitizer tests"
+regexTarget = "match"
+regexes = [
+  '''AKIDabcdefghijklmnopqrstuvwxyz01''',
+  '''sk-abcdefghijklmnopqrstuvwxyz012345''',
+  '''Bearer aaaaaaaaaaaaaaaaaaaa'''
+]

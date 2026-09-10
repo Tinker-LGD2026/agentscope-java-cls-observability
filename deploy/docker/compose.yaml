@@ -1,0 +1,20 @@
+services:
+  agent:
+    image: ${AGENT_IMAGE_DIGEST:?set AGENT_IMAGE_DIGEST to registry/repository@sha256:digest}
+    env_file:
+      - ${CLS_ENV_FILE:?set CLS_ENV_FILE outside the repository}
+    environment:
+      CLS_SERVICE_NAME: ${CLS_SERVICE_NAME:-my-agent-service}
+      CLS_DEPLOYMENT_ENVIRONMENT: ${CLS_DEPLOYMENT_ENVIRONMENT:-production}
+      CLS_CONTENT_CAPTURE: ${CLS_CONTENT_CAPTURE:-off}
+      CLS_REACTOR_CONTEXT_HOOK: "false"
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped

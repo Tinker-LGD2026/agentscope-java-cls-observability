@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an SDK improvement
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the customer problem without credentials or private data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Security, privacy, and compatibility impact
+      description: State whether this changes collected fields, content, dependencies, or public APIs.
+    validations:
+      required: true

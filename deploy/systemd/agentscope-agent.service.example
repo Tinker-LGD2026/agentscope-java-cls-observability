@@ -1,0 +1,32 @@
+[Unit]
+Description=AgentScope Agent Application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentapp
+Group=agentapp
+WorkingDirectory=/opt/agent-app
+EnvironmentFile=/etc/agent-app/cls.env
+ExecStart=/usr/bin/java -jar /opt/agent-app/app.jar
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

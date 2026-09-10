@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentscope-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agentscope-agent
+  template:
+    metadata:
+      labels:
+        app: agentscope-agent
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ${AGENT_IMAGE}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - configMapRef:
+                name: agentscope-cls-config
+          env:
+            - name: CLS_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cls-credentials
+                  key: secret-id
+            - name: CLS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cls-credentials
+                  key: secret-key
+            - name: CLS_SECRET_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cls-credentials
+                  key: secret-token
+                  optional: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

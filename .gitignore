@@ -1,0 +1,30 @@
+# Build and private workspaces
+**/target/
+/dist/
+.tools/
+.research/
+.live-venv/
+.live-data/
+.private/
+
+# Credentials and local configuration
+.env
+.env.*
+*.env
+!*.env.example
+*.pem
+*.key
+*.p12
+*.jks
+测试信息.md
+
+# Language/tool caches
+__pycache__/
+*.py[cod]
+
+# IDE, OS, and logs
+.idea/
+.vscode/
+*.iml
+*.log
+.DS_Store

@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible SDK problem
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, Topic IDs, customer identifiers, complete prompts, or tool results.
+  - type: input
+    id: version
+    attributes:
+      label: SDK version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: java
+    attributes:
+      label: JDK vendor and version
+      placeholder: Temurin 17.0.x
+    validations:
+      required: true
+  - type: input
+    id: agentscope
+    attributes:
+      label: AgentScope Java version
+      placeholder: 2.0.3
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: [console, cloud]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction using synthetic data
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

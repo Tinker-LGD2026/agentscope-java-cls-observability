@@ -29,4 +29,4 @@ jobs:
           cache: maven
       - name: Build
         run: ./mvnw --batch-mode --no-transfer-progress clean package -DskipTests
-      - uses: github/codeql-action/analyze@c20e34f438d671fc35777cc9820dd7adf8252874 # v3
+      - uses: github/codeql-action/analyze@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3

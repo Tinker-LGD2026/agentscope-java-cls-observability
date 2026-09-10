@@ -29,6 +29,3 @@ All notable changes are documented here. This project follows Semantic Versionin
 - cwd and Git metadata are not collected.
 - `off` mode still emits a stable SHA-256 fingerprint for Chat input messages.
 - The in-memory export queue is not suitable as an audit or billing source.
-
-[Unreleased]: https://github.com/Tinker-LGD2026/agentscope-java-cls-observability/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Tinker-LGD2026/agentscope-java-cls-observability/releases/tag/v0.1.0

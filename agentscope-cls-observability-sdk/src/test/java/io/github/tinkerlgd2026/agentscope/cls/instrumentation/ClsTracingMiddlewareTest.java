@@ -575,7 +575,10 @@ class ClsTracingMiddlewareTest {
 
         SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
         String output = chat.getAttributes().get(stringKey("gen_ai.output.messages"));
+        assertThat(output)
+                .contains("reasoning", "inspect weather", "text", "take an umbrella");
         assertThat(output.indexOf("inspect weather"))
+                .isGreaterThanOrEqualTo(0)
                 .isLessThan(output.indexOf("take an umbrella"));
         assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
                 .isTrue();
@@ -671,6 +674,9 @@ class ClsTracingMiddlewareTest {
 
         SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
         assertThat(chat.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(chat.getAttributes().get(stringKey("error.type")))
+                .isEqualTo("java.lang.RuntimeException");
+        assertThat(chat.getAttributes().get(stringKey("gen_ai.react.finish_reason"))).isNull();
         assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
                 .isTrue();
         assertThat(chat.getAttributes().get(longKey("agentscope.reasoning.output_bytes")))
@@ -703,6 +709,9 @@ class ClsTracingMiddlewareTest {
                 .block(Duration.ofSeconds(5));
 
         SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
+        assertThat(chat.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(chat.getAttributes().get(stringKey("error.type"))).isEqualTo("cancelled");
+        assertThat(chat.getAttributes().get(stringKey("gen_ai.react.finish_reason"))).isNull();
         assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
                 .isTrue();
         assertThat(chat.getAttributes().get(longKey("agentscope.reasoning.output_bytes")))

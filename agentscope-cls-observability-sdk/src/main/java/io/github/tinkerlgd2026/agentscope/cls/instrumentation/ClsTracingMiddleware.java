@@ -87,6 +87,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final ContentCaptureMode contentCaptureMode;
     private final ContentCaptureMode reasoningCaptureMode;
     private final int maxContentBytes;
+    private final ObjectMapper objectMapper;
     private final ObjectWriter canonicalWriter;
     private final AgentScopeMessageConverter messageConverter;
     private final BooleanSupplier active;
@@ -173,6 +174,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         this.contentCaptureMode = contentCaptureMode;
         this.reasoningCaptureMode = reasoningCaptureMode;
         this.maxContentBytes = maxContentBytes;
+        this.objectMapper = objectMapper;
         this.active = active;
         this.counters = counters;
         this.canonicalWriter =
@@ -433,7 +435,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         long started = System.nanoTime();
         OutputMessageAccumulator output =
                 new OutputMessageAccumulator(
-                        JsonSupport.newObjectMapper(),
+                        objectMapper,
                         messageCapturePolicy,
                         contentCaptureMode,
                         reasoningCaptureMode,
@@ -450,34 +452,39 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                     });
             return Flux.error(exception);
         }
+        AtomicBoolean completedNormally = new AtomicBoolean();
         Flux<AgentEvent> observed =
                 terminate(
-                        downstream.doOnNext(
-                                event ->
-                                        quietly(
-                                                () ->
-                                                        applyModelEvent(
-                                                                span,
-                                                                event,
-                                                                output,
-                                                                started,
-                                                                agentFrame,
-                                                                step,
-                                                                modelName,
-                                                                providerName))),
+                        downstream
+                                .doOnNext(
+                                        event ->
+                                                quietly(
+                                                        () ->
+                                                                applyModelEvent(
+                                                                        span,
+                                                                        event,
+                                                                        output,
+                                                                        started,
+                                                                        agentFrame,
+                                                                        step,
+                                                                        modelName,
+                                                                        providerName)))
+                                .doOnComplete(() -> completedNormally.set(true)),
                         span,
                         "model call failed",
                         () -> {
                             setDuration(span, "gen_ai.chat.duration_ms", started);
                             OutputMessageAccumulator.Result result =
                                     output.finish(System.nanoTime() - started);
-                            String finishReason = result.usedTools() ? "tool_calls" : "stop";
-                            span.setAttribute(
-                                    Objects.requireNonNull(
-                                            AttributeKey.stringArrayKey(
-                                                    "gen_ai.response.finish_reasons")),
-                                    List.of(finishReason));
-                            span.setAttribute("gen_ai.react.finish_reason", finishReason);
+                            if (completedNormally.get()) {
+                                String finishReason = result.usedTools() ? "tool_calls" : "stop";
+                                span.setAttribute(
+                                        Objects.requireNonNull(
+                                                AttributeKey.stringArrayKey(
+                                                        "gen_ai.response.finish_reasons")),
+                                        List.of(finishReason));
+                                span.setAttribute("gen_ai.react.finish_reason", finishReason);
+                            }
                             result.messages()
                                     .ifPresent(
                                             node ->

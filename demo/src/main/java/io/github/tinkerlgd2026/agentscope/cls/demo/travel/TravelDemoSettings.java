@@ -17,6 +17,7 @@ final class TravelDemoSettings {
     private final String city;
     private final String firstPrompt;
     private final String secondPrompt;
+    private final boolean reasoningEnabled;
 
     private TravelDemoSettings(
             String deepSeekApiKey,
@@ -25,7 +26,8 @@ final class TravelDemoSettings {
             String userName,
             String city,
             String firstPrompt,
-            String secondPrompt) {
+            String secondPrompt,
+            boolean reasoningEnabled) {
         this.deepSeekApiKey = deepSeekApiKey;
         this.sessionId = sessionId;
         this.userId = userId;
@@ -33,6 +35,7 @@ final class TravelDemoSettings {
         this.city = city;
         this.firstPrompt = firstPrompt;
         this.secondPrompt = secondPrompt;
+        this.reasoningEnabled = reasoningEnabled;
     }
 
     static TravelDemoSettings fromEnvironment(Map<String, String> environment) {
@@ -59,8 +62,17 @@ final class TravelDemoSettings {
                         "TRAVEL_FOLLOW_UP_PROMPT",
                         "如果第二天下雨，请把室外安排替换为室内活动，并把总预算目标提高到4000元。"
                                 + "请继续使用天气专家、行程专家和预算工具后再回答。");
+        boolean reasoningEnabled =
+                strictBoolean(environment.get("TRAVEL_ENABLE_REASONING"), "TRAVEL_ENABLE_REASONING");
         return new TravelDemoSettings(
-                apiKey, sessionId, userId, userName, city, firstPrompt, secondPrompt);
+                apiKey,
+                sessionId,
+                userId,
+                userName,
+                city,
+                firstPrompt,
+                secondPrompt,
+                reasoningEnabled);
     }
 
     RuntimeContext newRuntimeContext() {
@@ -100,6 +112,23 @@ final class TravelDemoSettings {
 
     String secondPrompt() {
         return secondPrompt;
+    }
+
+    boolean reasoningEnabled() {
+        return reasoningEnabled;
+    }
+
+    private static boolean strictBoolean(String value, String name) {
+        if (value == null) {
+            return false;
+        }
+        if ("true".equalsIgnoreCase(value.trim())) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value.trim())) {
+            return false;
+        }
+        throw new IllegalArgumentException(name + " must be true or false");
     }
 
     private static String required(Map<String, String> environment, String name) {

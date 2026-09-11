@@ -4,12 +4,14 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.transport.HttpTransport;
 import io.agentscope.core.model.transport.JdkHttpTransport;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.core.tool.subagent.SubAgentConfig;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
+import io.agentscope.extensions.model.openai.compat.deepseek.DeepSeekFormatter;
 import io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability;
 import io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig;
 import java.time.Duration;
@@ -33,7 +35,8 @@ public final class TravelPlannerApplication {
         ClsObservabilityConfig clsConfig =
                 ClsObservabilityConfig.fromEnvironment(Objects.requireNonNull(environment));
 
-        try (ModelResources modelResources = createModel(settings.deepSeekApiKey());
+        try (ModelResources modelResources =
+                        createModel(settings.deepSeekApiKey(), settings.reasoningEnabled());
                 ClsAgentObservability observability = ClsAgentObservability.create(clsConfig)) {
             clsConfig.destroyCredentials();
             OpenMeteoWeatherTool weatherTool = new OpenMeteoWeatherTool();
@@ -182,7 +185,15 @@ public final class TravelPlannerApplication {
         return response.getTextContent();
     }
 
-    private static ModelResources createModel(String apiKey) {
+    static GenerateOptions deepSeekOptions(boolean enabled) {
+        return GenerateOptions.builder()
+                .reasoningEffort("high")
+                .additionalBodyParam(
+                        "thinking", Map.of("type", enabled ? "enabled" : "disabled"))
+                .build();
+    }
+
+    private static ModelResources createModel(String apiKey, boolean reasoningEnabled) {
         HttpTransport transport = JdkHttpTransport.builder().build();
         try {
             Model model =
@@ -190,6 +201,8 @@ public final class TravelPlannerApplication {
                             .apiKey(apiKey)
                             .baseUrl("https://api.deepseek.com/v1")
                             .modelName("deepseek-chat")
+                            .formatter(new DeepSeekFormatter())
+                            .generateOptions(deepSeekOptions(reasoningEnabled))
                             .httpTransport(transport)
                             .stream(true)
                             .nativeStructuredOutputWithTools(false)

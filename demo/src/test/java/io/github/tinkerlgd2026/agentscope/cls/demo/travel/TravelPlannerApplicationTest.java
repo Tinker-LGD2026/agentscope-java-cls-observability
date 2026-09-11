@@ -49,6 +49,18 @@ class TravelPlannerApplicationTest {
     }
 
     @Test
+    void deepSeekOptionsExplicitlyControlThinkingMode() {
+        GenerateOptions enabled = TravelPlannerApplication.deepSeekOptions(true);
+        GenerateOptions disabled = TravelPlannerApplication.deepSeekOptions(false);
+
+        assertThat(enabled.getReasoningEffort()).isEqualTo("high");
+        assertThat(enabled.getAdditionalBodyParams())
+                .containsEntry("thinking", Map.of("type", "enabled"));
+        assertThat(disabled.getAdditionalBodyParams())
+                .containsEntry("thinking", Map.of("type", "disabled"));
+    }
+
+    @Test
     void calculatesAStableBudgetBreakdown() throws Exception {
         JsonNode result =
                 JSON.readTree(

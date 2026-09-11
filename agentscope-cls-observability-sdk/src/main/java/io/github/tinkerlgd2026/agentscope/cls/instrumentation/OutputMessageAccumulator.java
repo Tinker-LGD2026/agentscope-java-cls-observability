@@ -40,6 +40,7 @@ final class OutputMessageAccumulator {
     private final Map<BlockKey, StreamPart> textBlocks = new LinkedHashMap<>();
     private final Map<BlockKey, StreamPart> reasoningBlocks = new LinkedHashMap<>();
     private final Map<BlockKey, ToolPart> toolCalls = new LinkedHashMap<>();
+    private final Map<BlockKey, PartKind> lifecycleTypes = new LinkedHashMap<>();
     private long malformedEvents;
     private long firstReasoningDeltaNanos = -1;
     private long firstTextDeltaNanos = -1;
@@ -92,6 +93,7 @@ final class OutputMessageAccumulator {
         }
         reasoningBlocks.values().forEach(part -> part.close(elapsedNanos));
         textBlocks.values().forEach(part -> part.close(elapsedNanos));
+        toolCalls.values().forEach(ToolPart::close);
         List<Map<String, Object>> parts = outputParts(false);
         if (encodedLength(parts) > maxBytes && hasVisibleReasoning(parts)) {
             reasoningBlocks.values().forEach(StreamPart::forceHash);
@@ -130,8 +132,7 @@ final class OutputMessageAccumulator {
     }
 
     private void startReasoning(BlockKey key, long elapsedNanos) {
-        StreamPart existing = reasoningBlocks.get(key);
-        if (existing != null) {
+        if (!claim(key, PartKind.REASONING) || reasoningBlocks.containsKey(key)) {
             malformedEvents++;
             return;
         }
@@ -141,12 +142,20 @@ final class OutputMessageAccumulator {
     }
 
     private void reasoningDelta(BlockKey key, String delta, long elapsedNanos) {
+        if (!claim(key, PartKind.REASONING)) {
+            malformedEvents++;
+            return;
+        }
         StreamPart part = reasoningBlocks.get(key);
         if (part == null) {
             malformedEvents++;
             part = new StreamPart("reasoning", reasoningMode, elapsedNanos);
             reasoningBlocks.put(key, part);
             ordered.add(part);
+        }
+        if (part.closed()) {
+            malformedEvents++;
+            return;
         }
         if (delta != null && !delta.isEmpty() && firstReasoningDeltaNanos < 0) {
             firstReasoningDeltaNanos = elapsedNanos;
@@ -156,7 +165,7 @@ final class OutputMessageAccumulator {
 
     private void endReasoning(BlockKey key, long elapsedNanos) {
         StreamPart part = reasoningBlocks.get(key);
-        if (part == null) {
+        if (part == null || lifecycleTypes.get(key) != PartKind.REASONING || part.closed()) {
             malformedEvents++;
             return;
         }
@@ -164,7 +173,7 @@ final class OutputMessageAccumulator {
     }
 
     private void startText(BlockKey key, long elapsedNanos) {
-        if (textBlocks.containsKey(key)) {
+        if (!claim(key, PartKind.TEXT) || textBlocks.containsKey(key)) {
             malformedEvents++;
             return;
         }
@@ -174,12 +183,20 @@ final class OutputMessageAccumulator {
     }
 
     private void textDelta(BlockKey key, String delta, long elapsedNanos) {
+        if (!claim(key, PartKind.TEXT)) {
+            malformedEvents++;
+            return;
+        }
         StreamPart part = textBlocks.get(key);
         if (part == null) {
             malformedEvents++;
             part = new StreamPart("text", contentMode, elapsedNanos);
             textBlocks.put(key, part);
             ordered.add(part);
+        }
+        if (part.closed()) {
+            malformedEvents++;
+            return;
         }
         if (delta != null && !delta.isEmpty() && firstTextDeltaNanos < 0) {
             firstTextDeltaNanos = elapsedNanos;
@@ -189,7 +206,7 @@ final class OutputMessageAccumulator {
 
     private void endText(BlockKey key, long elapsedNanos) {
         StreamPart part = textBlocks.get(key);
-        if (part == null) {
+        if (part == null || lifecycleTypes.get(key) != PartKind.TEXT || part.closed()) {
             malformedEvents++;
             return;
         }
@@ -197,8 +214,7 @@ final class OutputMessageAccumulator {
     }
 
     private void startTool(BlockKey key, String name) {
-        ToolPart existing = toolCalls.get(key);
-        if (existing != null) {
+        if (!claim(key, PartKind.TOOL) || toolCalls.containsKey(key)) {
             malformedEvents++;
             return;
         }
@@ -208,25 +224,36 @@ final class OutputMessageAccumulator {
     }
 
     private void toolDelta(BlockKey key, String name, String delta) {
+        if (!claim(key, PartKind.TOOL)) {
+            malformedEvents++;
+            return;
+        }
         ToolPart part = toolCalls.get(key);
         if (part == null) {
             malformedEvents++;
             part = new ToolPart(key.blockId(), name);
             toolCalls.put(key, part);
             ordered.add(part);
+        }
+        if (part.closed) {
+            malformedEvents++;
+            return;
         }
         part.append(delta);
     }
 
     private void endTool(BlockKey key, String name) {
         ToolPart part = toolCalls.get(key);
-        if (part == null) {
+        if (part == null || lifecycleTypes.get(key) != PartKind.TOOL || part.closed) {
             malformedEvents++;
-            part = new ToolPart(key.blockId(), name);
-            toolCalls.put(key, part);
-            ordered.add(part);
+            return;
         }
-        part.closed = true;
+        part.close();
+    }
+
+    private boolean claim(BlockKey key, PartKind kind) {
+        PartKind existing = lifecycleTypes.putIfAbsent(key, kind);
+        return existing == null || existing == kind;
     }
 
     private List<Map<String, Object>> outputParts(boolean degradedReasoning) {
@@ -289,17 +316,15 @@ final class OutputMessageAccumulator {
     private final class StreamPart implements OutputPart {
         private final String type;
         private final ContentCaptureMode mode;
-        private final MessageDigest digest = digest();
-        private final ByteArrayOutputStream buffered = new ByteArrayOutputStream();
+        private final PayloadBuffer payload;
         private final long startedNanos;
         private long endedNanos = -1;
-        private long originalBytes;
-        private boolean truncated;
         private boolean forcedHash;
 
         private StreamPart(String type, ContentCaptureMode mode, long startedNanos) {
             this.type = type;
             this.mode = mode;
+            this.payload = new PayloadBuffer(mode);
             this.startedNanos = startedNanos;
         }
 
@@ -307,40 +332,17 @@ final class OutputMessageAccumulator {
             return true;
         }
 
-        private void append(String delta) {
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            byte[] bytes = delta.getBytes(StandardCharsets.UTF_8);
-            originalBytes += bytes.length;
-            if (mode != ContentCaptureMode.OFF) {
-                digest.update(bytes);
-            }
-            if (mode == ContentCaptureMode.TRUNCATE || mode == ContentCaptureMode.FULL) {
-                appendUtf8Prefix(delta, maxBytes - buffered.size());
-            }
+        private boolean closed() {
+            return endedNanos >= 0;
         }
 
-        private void appendUtf8Prefix(String value, int remaining) {
-            if (remaining <= 0) {
-                truncated = true;
-                return;
-            }
-            for (int offset = 0; offset < value.length(); ) {
-                int codePoint = value.codePointAt(offset);
-                byte[] bytes = new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8);
-                if (bytes.length > remaining) {
-                    truncated = true;
-                    return;
-                }
-                buffered.writeBytes(bytes);
-                remaining -= bytes.length;
-                offset += Character.charCount(codePoint);
-            }
+        private void append(String delta) {
+            payload.append(delta);
         }
 
         private void close(long elapsedNanos) {
-            if (endedNanos < 0) {
+            if (!closed()) {
+                payload.finish();
                 endedNanos = Math.max(startedNanos, elapsedNanos);
             }
         }
@@ -350,11 +352,11 @@ final class OutputMessageAccumulator {
         }
 
         private long originalBytes() {
-            return originalBytes;
+            return payload.originalBytes;
         }
 
         private boolean truncated() {
-            return truncated || forcedHash;
+            return payload.truncated || forcedHash;
         }
 
         private void forceHash() {
@@ -365,7 +367,7 @@ final class OutputMessageAccumulator {
 
         @Override
         public Map<String, Object> output(boolean degradedReasoning) {
-            if (mode == ContentCaptureMode.OFF || originalBytes == 0) {
+            if (mode == ContentCaptureMode.OFF || payload.originalBytes == 0) {
                 return null;
             }
             boolean hashOnly =
@@ -373,16 +375,12 @@ final class OutputMessageAccumulator {
                             || forcedHash
                             || (degradedReasoning && "reasoning".equals(type));
             if (hashOnly) {
-                return Map.of(
-                        "type", type + "_hash",
-                        "sha256", HexFormat.of().formatHex(digest.digest()),
-                        "original_bytes", originalBytes,
-                        "truncated", truncated());
+                return hashPart(type + "_hash", payload, truncated());
             }
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("type", type);
-            result.put("content", buffered.toString(StandardCharsets.UTF_8));
-            if (truncated) {
+            result.put("content", payload.text());
+            if (payload.truncated) {
                 result.put("truncated", true);
             }
             return Map.copyOf(result);
@@ -392,9 +390,8 @@ final class OutputMessageAccumulator {
     private final class ToolPart implements OutputPart {
         private final String id;
         private final String name;
-        private final StringBuilder arguments = new StringBuilder();
+        private final PayloadBuffer arguments = new PayloadBuffer(contentMode);
         private boolean closed;
-        private boolean truncated;
 
         private ToolPart(String id, String name) {
             this.id = id == null ? "" : id;
@@ -402,21 +399,13 @@ final class OutputMessageAccumulator {
         }
 
         private void append(String delta) {
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            int remaining = maxBytes - arguments.toString().getBytes(StandardCharsets.UTF_8).length;
-            for (int offset = 0; offset < delta.length(); ) {
-                int codePoint = delta.codePointAt(offset);
-                String character = new String(Character.toChars(codePoint));
-                int size = character.getBytes(StandardCharsets.UTF_8).length;
-                if (size > remaining) {
-                    truncated = true;
-                    return;
-                }
-                arguments.append(character);
-                remaining -= size;
-                offset += Character.charCount(codePoint);
+            arguments.append(delta);
+        }
+
+        private void close() {
+            if (!closed) {
+                arguments.finish();
+                closed = true;
             }
         }
 
@@ -426,10 +415,12 @@ final class OutputMessageAccumulator {
             result.put("type", "tool_call");
             result.put("id", id);
             result.put("name", name);
-            if (!arguments.isEmpty()) {
-                result.put("arguments", parseArguments(arguments.toString()));
+            if (arguments.originalBytes > 0 && contentMode == ContentCaptureMode.HASH) {
+                result.put("arguments", hashEnvelope(arguments));
+            } else if (arguments.originalBytes > 0 && contentMode != ContentCaptureMode.OFF) {
+                result.put("arguments", parseArguments(arguments.text()));
             }
-            if (truncated) {
+            if (arguments.truncated) {
                 result.put("truncated", true);
             }
             return Map.copyOf(result);
@@ -444,12 +435,115 @@ final class OutputMessageAccumulator {
         }
     }
 
+    private final class PayloadBuffer {
+        private final ContentCaptureMode mode;
+        private final MessageDigest digest;
+        private final ByteArrayOutputStream buffered;
+        private long originalBytes;
+        private boolean truncated;
+        private char pendingHighSurrogate;
+        private String digestHex;
+
+        private PayloadBuffer(ContentCaptureMode mode) {
+            this.mode = mode;
+            this.digest = mode == ContentCaptureMode.OFF ? null : digest();
+            this.buffered =
+                    mode == ContentCaptureMode.TRUNCATE || mode == ContentCaptureMode.FULL
+                            ? new ByteArrayOutputStream()
+                            : null;
+        }
+
+        private void append(String delta) {
+            if (delta == null || delta.isEmpty()) {
+                return;
+            }
+            String value =
+                    pendingHighSurrogate == 0 ? delta : pendingHighSurrogate + delta;
+            pendingHighSurrogate = 0;
+            if (!value.isEmpty() && Character.isHighSurrogate(value.charAt(value.length() - 1))) {
+                pendingHighSurrogate = value.charAt(value.length() - 1);
+                value = value.substring(0, value.length() - 1);
+            }
+            appendComplete(value);
+        }
+
+        private void finish() {
+            if (pendingHighSurrogate != 0) {
+                appendComplete(String.valueOf(pendingHighSurrogate));
+                pendingHighSurrogate = 0;
+            }
+        }
+
+        private void appendComplete(String value) {
+            if (value.isEmpty()) {
+                return;
+            }
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            originalBytes += bytes.length;
+            if (digest != null) {
+                digest.update(bytes);
+            }
+            if (buffered != null) {
+                appendUtf8Prefix(value, maxBytes - buffered.size());
+            }
+        }
+
+        private void appendUtf8Prefix(String value, int remaining) {
+            for (int offset = 0; offset < value.length(); ) {
+                int codePoint = value.codePointAt(offset);
+                byte[] bytes = new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8);
+                if (bytes.length > remaining) {
+                    truncated = true;
+                    return;
+                }
+                buffered.writeBytes(bytes);
+                remaining -= bytes.length;
+                offset += Character.charCount(codePoint);
+            }
+        }
+
+        private String text() {
+            return buffered == null ? "" : buffered.toString(StandardCharsets.UTF_8);
+        }
+
+        private String digestHex() {
+            if (digestHex == null) {
+                digestHex = HexFormat.of().formatHex(Objects.requireNonNull(digest).digest());
+            }
+            return digestHex;
+        }
+    }
+
+    private static Map<String, Object> hashPart(
+            String type, PayloadBuffer payload, boolean truncated) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type", type);
+        result.put("sha256", payload.digestHex());
+        result.put("original_bytes", payload.originalBytes);
+        if (truncated) {
+            result.put("truncated", true);
+        }
+        return Map.copyOf(result);
+    }
+
+    private static Map<String, Object> hashEnvelope(PayloadBuffer payload) {
+        return Map.of(
+                "sha256", payload.digestHex(),
+                "original_bytes", payload.originalBytes);
+    }
+
     private static MessageDigest digest() {
         try {
             return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
+    }
+
+    private enum PartKind {
+        REASONING,
+        TEXT,
+        TOOL
     }
 
     private record BlockKey(String replyId, String blockId) {}

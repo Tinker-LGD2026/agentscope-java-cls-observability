@@ -128,9 +128,14 @@ public final class MessageCapturePolicy {
 
     private Map<String, Object> captureToolCall(Map<String, Object> part) {
         Map<String, Object> result = toolIdentity(part, true);
-        contentSanitizer
-                .capture(part.get("arguments"))
-                .ifPresent(value -> result.put("arguments", value));
+        Object arguments = part.get("arguments");
+        if (contentMode == ContentCaptureMode.HASH && isHashEnvelope(arguments)) {
+            result.put("arguments", copyHashEnvelope((Map<?, ?>) arguments));
+        } else {
+            contentSanitizer
+                    .capture(arguments)
+                    .ifPresent(value -> result.put("arguments", value));
+        }
         return Map.copyOf(result);
     }
 
@@ -208,6 +213,18 @@ public final class MessageCapturePolicy {
             }
         }
         return List.copyOf(result);
+    }
+
+    private static boolean isHashEnvelope(@Nullable Object value) {
+        return value instanceof Map<?, ?> map
+                && map.get("sha256") instanceof String
+                && map.get("original_bytes") instanceof Number;
+    }
+
+    private static Map<String, Object> copyHashEnvelope(Map<?, ?> source) {
+        return Map.of(
+                "sha256", nonNullValue(source.get("sha256"), ""),
+                "original_bytes", nonNullValue(source.get("original_bytes"), 0L));
     }
 
     private static Map<String, Object> copyHashPart(

@@ -133,6 +133,125 @@ class OutputMessageAccumulatorTest {
     }
 
     @Test
+    void hashRemainsStableWhenReasoningBudgetCausesMultipleRenderPasses() {
+        OutputMessageAccumulator accumulator = accumulator(HASH, FULL, 256);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think", "中".repeat(500)), 1_000_000L);
+        accumulator.accept(new TextBlockDeltaEvent("reply", "text", "answer"), 2_000_000L);
+
+        String output = accumulator.finish(3_000_000L).messages().orElseThrow().toString();
+
+        assertThat(output)
+                .contains("0db52f4076c082518412afd3dd3576e2cb0c63703fd7fed5e23ade60efef31d9")
+                .doesNotContain("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    @Test
+    void toolArgumentsRespectOffAndCompleteHashModes() {
+        OutputMessageAccumulator off = accumulator(OFF, OFF, 4096);
+        off.accept(new ToolCallStartEvent("reply", "call-off", "search"), 1_000_000L);
+        off.accept(new ToolCallDeltaEvent("reply", "call-off", "search", "private"), 2_000_000L);
+        String offOutput = off.finish(3_000_000L).messages().orElseThrow().toString();
+        assertThat(offOutput).contains("call-off", "search").doesNotContain("private");
+
+        OutputMessageAccumulator hash = accumulator(HASH, OFF, 4096);
+        hash.accept(new ToolCallStartEvent("reply", "call-hash", "search"), 1_000_000L);
+        hash.accept(new ToolCallDeltaEvent("reply", "call-hash", "search", "hello"), 2_000_000L);
+        hash.accept(new ToolCallDeltaEvent("reply", "call-hash", "search", " world"), 3_000_000L);
+        String hashOutput = hash.finish(4_000_000L).messages().orElseThrow().toString();
+        assertThat(hashOutput)
+                .contains("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+                .contains("original_bytes", "11")
+                .doesNotContain("hello", "world");
+    }
+
+    @Test
+    void rejectsEventsAfterCloseAndCountsRepeatedEnds() {
+        OutputMessageAccumulator accumulator = accumulator(TRUNCATE, TRUNCATE, 4096);
+        accumulator.accept(new ThinkingBlockStartEvent("reply", "think"), 1_000_000L);
+        accumulator.accept(new ThinkingBlockDeltaEvent("reply", "think", "first"), 2_000_000L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "think"), 3_000_000L);
+        accumulator.accept(new ThinkingBlockDeltaEvent("reply", "think", "late"), 4_000_000L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "think"), 5_000_000L);
+        accumulator.accept(new ToolCallEndEvent("reply", "orphan", "search"), 6_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(7_000_000L);
+
+        assertThat(result.messages().orElseThrow().toString()).contains("first").doesNotContain("late");
+        assertThat(result.reasoning().malformedEventCount()).isEqualTo(3);
+        assertThat(result.usedTools()).isFalse();
+    }
+
+    @Test
+    void joinsSurrogatePairsSplitAcrossDeltasBeforeHashingAndBuffering() {
+        String emoji = "😀";
+        char high = emoji.charAt(0);
+        char low = emoji.charAt(1);
+        OutputMessageAccumulator visible = accumulator(TRUNCATE, TRUNCATE, 4096);
+        visible.accept(new ThinkingBlockDeltaEvent("reply", "think", String.valueOf(high)), 1_000_000L);
+        visible.accept(new ThinkingBlockDeltaEvent("reply", "think", String.valueOf(low)), 2_000_000L);
+        OutputMessageAccumulator.Result visibleResult = visible.finish(3_000_000L);
+        assertThat(visibleResult.messages().orElseThrow().toString()).contains(emoji);
+        assertThat(visibleResult.reasoning().outputBytes()).isEqualTo(4);
+
+        OutputMessageAccumulator hash = accumulator(OFF, HASH, 4096);
+        hash.accept(new ThinkingBlockDeltaEvent("reply", "think", String.valueOf(high)), 1_000_000L);
+        hash.accept(new ThinkingBlockDeltaEvent("reply", "think", String.valueOf(low)), 2_000_000L);
+        assertThat(hash.finish(3_000_000L).messages().orElseThrow().toString())
+                .contains("f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9");
+    }
+
+    @Test
+    void appliesBudgetAfterSanitizationExpansionAndStillKeepsText() throws Exception {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 256);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent(
+                        "reply", "think", "authorization=x ".repeat(12)),
+                1_000_000L);
+        accumulator.accept(
+                new TextBlockDeltaEvent("reply", "text", "final-answer"),
+                2_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(3_000_000L);
+        JsonNode messages = result.messages().orElseThrow();
+
+        assertThat(JSON.writeValueAsBytes(messages).length).isLessThanOrEqualTo(256);
+        assertThat(messages.toString()).contains("final-answer").doesNotContain("authorization=x");
+        assertThat(result.reasoning().truncated()).isTrue();
+    }
+
+    @Test
+    void redactsSecretsThatSpanReasoningDeltas() {
+        OutputMessageAccumulator accumulator = accumulator(OFF, TRUNCATE, 4096);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think", "Bearer abc"),
+                1_000_000L);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think", "def1234567890"),
+                2_000_000L);
+
+        String output = accumulator.finish(3_000_000L).messages().orElseThrow().toString();
+
+        assertThat(output).contains("[REDACTED_SECRET]").doesNotContain("abcdef1234567890");
+    }
+
+    @Test
+    void sameBlockIdInDifferentRepliesRemainsIndependent() {
+        OutputMessageAccumulator accumulator = accumulator(TRUNCATE, TRUNCATE, 4096);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply-1", "think", "first"),
+                1_000_000L);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply-2", "think", "second"),
+                2_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(3_000_000L);
+
+        assertThat(result.reasoning().blockCount()).isEqualTo(2);
+        assertThat(result.messages().orElseThrow().toString()).contains("first", "second");
+    }
+
+    @Test
     void finishIsIdempotent() {
         OutputMessageAccumulator accumulator = accumulator(TRUNCATE, TRUNCATE, 4096);
         accumulator.accept(new ThinkingBlockDeltaEvent("reply", "think", "plan"), 2_000_000L);

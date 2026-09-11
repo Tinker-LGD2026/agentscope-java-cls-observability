@@ -22,7 +22,10 @@ AgentScope Java 2.0 官方要求 JDK 17+。即使 SDK 自己改写为 Java 11，
 
 SDK直接使用 `MiddlewareBase`、`RuntimeContext`、事件类型和原生 `SubAgentTool`。AgentScope 升级后应运行完整测试和真实多 Agent 验证。
 
-通用 Reasoning 契约基于 AgentScope Core 2.0.3 的 `ThinkingBlock` 和 Thinking Start/Delta/End events。自动化验证使用 Provider 无关的测试 Model，证明完整 ReAct 事件链可以生成 Chat Reasoning parts。
+通用 Reasoning 契约基于 AgentScope Core 2.0.3 的 `ThinkingBlock` 和 Thinking Start/Delta/End events。验证分两层：
+
+- 自动化：Provider 无关的测试 Model 经完整 ReAct 事件链生成 Chat Reasoning parts（单元与集成测试）；
+- 真实联调：DeepSeek `deepseek-chat` 开启 Thinking（`thinking: {"type":"enabled"}`），通过 AgentScope OpenAI 兼容扩展 + `DeepSeekFormatter` 端到端写入 CLS 验证通过——reasoning/text 顺序、隐私隔离（无 signature/encrypted metadata 泄漏）、`truncate` 与 `off` 语义、投递计数（acceptedSpans=44、invalidSpans=0、exportFailures=0）均符合设计。
 
 OpenAI-compatible、Anthropic、Gemini 等模型是否产生完整 Thinking 事件，取决于对应 AgentScope Model Extension 对原始协议的适配。SDK 不直接解析 Provider 字段，也不承诺未验证 Extension 的原始协议兼容性；Extension 未产生 `ThinkingBlock` 时，SDK 不会猜测或重建推理内容。
 

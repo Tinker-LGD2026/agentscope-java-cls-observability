@@ -152,9 +152,70 @@ public final class MessageCapturePolicy {
             return value;
         }
 
-        List<Map<String, Object>> textOnly =
-                transformMessages(withoutToolPayloads, false, false, true);
-        return finalBudgetSanitizer.captureMessages(textOnly);
+        List<Map<String, Object>> latestPriority =
+                latestPriorityMessages(withoutToolPayloads, textExpected, toolExpected);
+        value = finalBudgetSanitizer.captureMessages(latestPriority);
+        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
+            return value;
+        }
+
+        if (textExpected) {
+            List<Map<String, Object>> latestText =
+                    latestPriorityMessages(withoutToolPayloads, true, false);
+            value = finalBudgetSanitizer.captureMessages(latestText);
+            if (containsText(value)) {
+                return value;
+            }
+        }
+        List<Map<String, Object>> latestTool =
+                latestPriorityMessages(withoutToolPayloads, false, toolExpected);
+        return finalBudgetSanitizer.captureMessages(latestTool);
+    }
+
+    private static List<Map<String, Object>> latestPriorityMessages(
+            List<Map<String, Object>> messages, boolean includeText, boolean includeTool) {
+        PartLocation latestText = null;
+        PartLocation latestTool = null;
+        for (int messageIndex = messages.size() - 1; messageIndex >= 0; messageIndex--) {
+            List<Map<String, Object>> parts = asParts(messages.get(messageIndex).get("parts"));
+            for (int partIndex = parts.size() - 1; partIndex >= 0; partIndex--) {
+                String type = String.valueOf(parts.get(partIndex).get("type"));
+                if (includeText
+                        && latestText == null
+                        && ("text".equals(type) || "text_hash".equals(type))) {
+                    latestText = new PartLocation(messageIndex, partIndex);
+                }
+                if (includeTool
+                        && latestTool == null
+                        && ("tool_call".equals(type) || "tool_call_response".equals(type))) {
+                    latestTool = new PartLocation(messageIndex, partIndex);
+                }
+            }
+        }
+
+        List<Map<String, Object>> selected = new ArrayList<>();
+        for (int messageIndex = 0; messageIndex < messages.size(); messageIndex++) {
+            List<Map<String, Object>> parts = asParts(messages.get(messageIndex).get("parts"));
+            List<Map<String, Object>> selectedParts = new ArrayList<>(2);
+            for (int partIndex = 0; partIndex < parts.size(); partIndex++) {
+                PartLocation current = new PartLocation(messageIndex, partIndex);
+                if (current.equals(latestText) || current.equals(latestTool)) {
+                    selectedParts.add(parts.get(partIndex));
+                }
+            }
+            if (selectedParts.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> message = messages.get(messageIndex);
+            Map<String, Object> copy = new LinkedHashMap<>();
+            copy.put("role", nonNullValue(message.get("role"), "unknown"));
+            if (message.get("name") != null) {
+                copy.put("name", message.get("name"));
+            }
+            copy.put("parts", List.copyOf(selectedParts));
+            selected.add(Map.copyOf(copy));
+        }
+        return List.copyOf(selected);
     }
 
     private List<Map<String, Object>> transformMessages(
@@ -467,6 +528,8 @@ public final class MessageCapturePolicy {
     }
 
     private record BoundedMessages(List<Map<String, Object>> messages, boolean complete) {}
+
+    private record PartLocation(int messageIndex, int partIndex) {}
 
     private static final class SelectionLimits {
         private static final int MAX_MESSAGES = 32;

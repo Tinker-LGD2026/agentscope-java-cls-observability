@@ -276,6 +276,50 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void finalBudgetDropsOlderTextUntilLatestAnswerFits() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+        List<Map<String, Object>> parts = new ArrayList<>();
+        for (int index = 0; index < 15; index++) {
+            parts.add(Map.of("type", "text", "content", ("old-" + index).repeat(50)));
+        }
+        parts.add(Map.of("type", "text", "content", "final-answer"));
+
+        String encoded =
+                policy.capture(List.of(Map.of("role", "assistant", "parts", parts)), false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded).contains("final-answer");
+    }
+
+    @Test
+    void toolOnlyBudgetKeepsNewestIdentityWhenAllToolIdentitiesDoNotFit() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+        List<Map<String, Object>> parts = new ArrayList<>();
+        for (int index = 0; index < 8; index++) {
+            parts.add(
+                    Map.of(
+                            "type", "tool_call",
+                            "id", "call-" + index + "-" + "x".repeat(40),
+                            "name", "search-" + index + "-" + "y".repeat(40),
+                            "arguments", Map.of()));
+        }
+
+        String encoded =
+                policy.capture(List.of(Map.of("role", "assistant", "parts", parts)), false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded).contains("call-7", "search-7");
+    }
+
+    @Test
     void toolOnlyBudgetKeepsIdentityAfterDroppingReasoningAndArguments() {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

@@ -96,7 +96,7 @@ export CLS_REASONING_CAPTURE=off
 - `gen_ai.tool.call.arguments`；
 - `gen_ai.tool.call.result`。
 
-所有采集模式都不应被视为 DLP。`off` 模式中的稳定无盐 Hash 也可能关联相同输入，详见 [`security-and-privacy.md`](security-and-privacy.md)。
+所有采集模式都不应被视为 DLP。普通正文 `CLS_CONTENT_CAPTURE=off` 下的稳定无盐 Chat 输入 Hash 也可能关联相同输入；Reasoning `off` 不生成该 Hash。详见 [`security-and-privacy.md`](security-and-privacy.md)。
 
 ## 导出性能参数
 

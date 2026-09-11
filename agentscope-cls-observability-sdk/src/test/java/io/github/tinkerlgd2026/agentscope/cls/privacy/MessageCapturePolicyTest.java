@@ -230,6 +230,56 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void finalBudgetPreservesTextAndToolIdentityBeforeToolArguments() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+
+        String encoded =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "tool_call",
+                                                "id", "call-1",
+                                                "name", "search",
+                                                "arguments", "private-argument".repeat(100)),
+                                        Map.of(
+                                                "type", "text",
+                                                "content", "final-answer")),
+                                false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded)
+                .contains("final-answer", "tool_call", "call-1", "search")
+                .doesNotContain("private-argument");
+    }
+
+    @Test
+    void finalBudgetPreservesShortTextBeforeLongReasoningForAgentResults() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.FULL, 256);
+
+        String encoded =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "reasoning",
+                                                "content", "private-plan".repeat(100)),
+                                        Map.of(
+                                                "type", "text",
+                                                "content", "final-answer")),
+                                false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded).contains("final-answer").doesNotContain("private-plan");
+    }
+
+    @Test
     void finalCaptureHonoursHardByteBudget() throws Exception {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

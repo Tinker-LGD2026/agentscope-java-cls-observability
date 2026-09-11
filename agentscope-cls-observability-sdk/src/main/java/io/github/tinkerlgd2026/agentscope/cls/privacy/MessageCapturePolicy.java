@@ -43,14 +43,124 @@ public final class MessageCapturePolicy {
                             ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
                             : Optional.empty();
             List<Map<String, Object>> captured = captureMessages(source);
-            Optional<JsonNode> value =
-                    captured.isEmpty()
-                            ? Optional.empty()
-                            : finalBudgetSanitizer.captureMessages(captured);
+            Optional<JsonNode> value = captureWithPriority(captured);
             return new CapturedMessages(value, observableHash);
         } catch (RuntimeException | StackOverflowError failure) {
             return new CapturedMessages(Optional.empty(), Optional.empty());
         }
+    }
+
+    private Optional<JsonNode> captureWithPriority(List<Map<String, Object>> captured) {
+        if (captured.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean textExpected = containsText(captured);
+        Optional<JsonNode> value = finalBudgetSanitizer.captureMessages(captured);
+        if (!textExpected || containsText(value)) {
+            return value;
+        }
+
+        List<Map<String, Object>> withoutReasoning = transformMessages(captured, true, false, false);
+        value = finalBudgetSanitizer.captureMessages(withoutReasoning);
+        if (containsText(value)) {
+            return value;
+        }
+
+        List<Map<String, Object>> withoutToolPayloads =
+                transformMessages(withoutReasoning, false, true, false);
+        value = finalBudgetSanitizer.captureMessages(withoutToolPayloads);
+        if (containsText(value)) {
+            return value;
+        }
+
+        List<Map<String, Object>> textOnly =
+                transformMessages(withoutToolPayloads, false, false, true);
+        return finalBudgetSanitizer.captureMessages(textOnly);
+    }
+
+    private List<Map<String, Object>> transformMessages(
+            List<Map<String, Object>> messages,
+            boolean removeReasoning,
+            boolean stripToolPayloads,
+            boolean removeTools) {
+        List<Map<String, Object>> transformed = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            List<Map<String, Object>> parts =
+                    transformParts(
+                            asParts(message.get("parts")),
+                            removeReasoning,
+                            stripToolPayloads,
+                            removeTools);
+            if (parts.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            copy.put("role", nonNullValue(message.get("role"), "unknown"));
+            if (message.get("name") != null) {
+                copy.put("name", message.get("name"));
+            }
+            copy.put("parts", parts);
+            transformed.add(Map.copyOf(copy));
+        }
+        return List.copyOf(transformed);
+    }
+
+    private List<Map<String, Object>> transformParts(
+            List<Map<String, Object>> parts,
+            boolean removeReasoning,
+            boolean stripToolPayloads,
+            boolean removeTools) {
+        List<Map<String, Object>> transformed = new ArrayList<>();
+        for (Map<String, Object> part : parts) {
+            String type = String.valueOf(part.getOrDefault("type", "unknown"));
+            if (removeReasoning
+                    && ("reasoning".equals(type) || "reasoning_hash".equals(type))) {
+                continue;
+            }
+            if (removeTools
+                    && ("tool_call".equals(type) || "tool_call_response".equals(type))) {
+                continue;
+            }
+            if (stripToolPayloads && "tool_call".equals(type)) {
+                transformed.add(toolIdentity(part, true));
+            } else if (stripToolPayloads && "tool_call_response".equals(type)) {
+                transformed.add(toolIdentity(part, true));
+            } else {
+                transformed.add(part);
+            }
+        }
+        return List.copyOf(transformed);
+    }
+
+    private static boolean containsText(List<Map<String, Object>> messages) {
+        for (Map<String, Object> message : messages) {
+            for (Map<String, Object> part : asParts(message.get("parts"))) {
+                String type = String.valueOf(part.get("type"));
+                if ("text".equals(type) || "text_hash".equals(type)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsText(Optional<JsonNode> messages) {
+        if (messages.isEmpty() || !messages.orElseThrow().isArray()) {
+            return false;
+        }
+        for (JsonNode message : messages.orElseThrow()) {
+            JsonNode parts = message.get("parts");
+            if (parts == null || !parts.isArray()) {
+                continue;
+            }
+            for (JsonNode part : parts) {
+                String type = part.path("type").asText();
+                if ("text".equals(type) || "text_hash".equals(type)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private List<Map<String, Object>> captureMessages(List<Map<String, Object>> messages) {

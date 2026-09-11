@@ -147,6 +147,95 @@ class OutputMessageAccumulatorTest {
     }
 
     @Test
+    void capsDistinctBlocksAndRetainedPayloadMemory() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 1024);
+        for (int index = 0; index < 400; index++) {
+            accumulator.accept(
+                    new ThinkingBlockDeltaEvent(
+                            "reply", "think-" + index, "r".repeat(128)),
+                    index + 1L);
+            accumulator.accept(
+                    new TextBlockDeltaEvent(
+                            "reply", "text-" + index, "t".repeat(128)),
+                    index + 1L);
+            accumulator.accept(
+                    new ToolCallDeltaEvent(
+                            "reply", "tool-" + index, "search", "a".repeat(128)),
+                    index + 1L);
+        }
+
+        OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+
+        assertThat(result.reasoning().blockCount()).isLessThanOrEqualTo(256);
+        assertThat(result.reasoning().malformedEventCount()).isGreaterThan(0);
+        assertThat(accumulator.retainedPayloadBytes()).isLessThanOrEqualTo(3L * 1024L);
+    }
+
+    @Test
+    void finalBudgetKeepsTextAndToolIdentityWhenArgumentsAreLargeWithoutReasoning() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, OFF, 256);
+        accumulator.accept(new ToolCallStartEvent("reply", "call-1", "search"), 1_000_000L);
+        accumulator.accept(
+                new ToolCallDeltaEvent(
+                        "reply", "call-1", "search", "private-argument".repeat(100)),
+                2_000_000L);
+        accumulator.accept(
+                new TextBlockDeltaEvent("reply", "text", "final-answer"), 3_000_000L);
+
+        String output = accumulator.finish(4_000_000L).messages().orElseThrow().toString();
+
+        assertThat(output)
+                .contains("final-answer", "tool_call", "call-1", "search")
+                .doesNotContain("private-argument");
+    }
+
+    @Test
+    void sanitizerOnlyReasoningBudgetFallbackMarksReasoningTruncated() {
+        OutputMessageAccumulator accumulator = accumulator(OFF, FULL, 256);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent(
+                        "reply", "think", "token=abcdef ".repeat(11)),
+                1_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(2_000_000L);
+
+        assertThat(result.reasoning().truncated()).isTrue();
+    }
+
+    @Test
+    void concurrentAcceptAndFinishProduceOneStableSnapshot() throws Exception {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
+        java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        try {
+            java.util.concurrent.Future<?> accepting =
+                    executor.submit(
+                            () -> {
+                                await(start);
+                                for (int index = 0; index < 1_000; index++) {
+                                    accumulator.accept(
+                                            new TextBlockDeltaEvent(
+                                                    "reply", "text", "chunk-" + index),
+                                            index + 1L);
+                                }
+                            });
+            java.util.concurrent.Future<OutputMessageAccumulator.Result> finishing =
+                    executor.submit(
+                            () -> {
+                                await(start);
+                                return accumulator.finish(2_000_000L);
+                            });
+            start.countDown();
+            accepting.get();
+            OutputMessageAccumulator.Result first = finishing.get();
+            assertThat(accumulator.finish(3_000_000L)).isEqualTo(first);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void toolArgumentsRespectOffAndCompleteHashModes() {
         OutputMessageAccumulator off = accumulator(OFF, OFF, 4096);
         off.accept(new ToolCallStartEvent("reply", "call-off", "search"), 1_000_000L);
@@ -324,6 +413,15 @@ class OutputMessageAccumulatorTest {
         OutputMessageAccumulator.Result second = accumulator.finish(9_000_000L);
 
         assertThat(second).isEqualTo(first);
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(exception);
+        }
     }
 
     private static OutputMessageAccumulator accumulator(

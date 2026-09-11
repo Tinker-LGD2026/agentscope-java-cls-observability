@@ -42,7 +42,17 @@ Hash 是稳定、无盐 SHA-256：
 - 对固定短语、布尔值、短编号等低熵内容可能被字典枚举；
 - 不能当作匿名化或加密。
 
-如果业务禁止任何内容派生值离开进程，当前版本不满足该要求，需在接入前增加独立 Hash 开关。
+普通 Chat 输入在正文 `off` 时仍保留稳定输入 Hash。如果业务禁止任何普通内容派生值离开进程，当前版本不满足该要求，需要在接入前扩展独立输入 Hash 开关。
+
+## Reasoning 特殊风险
+
+模型推理内容可能包含系统提示片段、用户敏感信息、工具中间参数，以及未经过最终回答过滤的判断，因此默认使用独立的 `CLS_REASONING_CAPTURE=off`：
+
+- 普通正文开启不会自动开启 Reasoning；
+- Reasoning `off` 只保留存在性、块数、原始字节数和时序指标，不保存原文或稳定 Hash；
+- Reasoning `hash` 使用稳定无盐 SHA-256，仍可关联相同低熵内容；
+- `truncate/full` 只采集 `ThinkingBlock.getThinking()`，仍执行脱敏和硬预算；
+- signature、thought signature、encrypted/redacted reasoning 和 `ThinkingBlock.metadata` 永不进入 Span。
 
 ## 脱敏能力
 

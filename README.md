@@ -34,7 +34,7 @@
 | 模型统计 | 模型、Provider、输入/输出/缓存 Token、结束原因和耗时 |
 | 工具观测 | 工具名、Call ID、状态、耗时，以及按策略采集的参数和结果 |
 | 错误定位 | Tool、模型或 Agent 失败会写 ERROR Span 和安全错误类型 |
-| 正文可选 | 默认不上传正文；支持 hash、truncate、full，全部有硬上限 |
+| 正文可选 | 普通正文和模型 Reasoning 独立配置；Reasoning 默认关闭，全部有硬上限 |
 | 故障隔离 | 遥测失败不替换 Agent 返回值，也不重试客户业务调用 |
 | 后台导出 | OTel 队列批量异步写入 CLS，降低请求路径开销 |
 
@@ -339,7 +339,8 @@ SDK 使用独立的 `SdkTracerProvider`，不替换宿主 `GlobalOpenTelemetry`�
 | `CLS_SECRET_TOKEN` | 无 | 临时凭证 Token |
 | `CLS_SERVICE_NAME` | `agentscope-java-app` | 服务名，1–128 字符 |
 | `CLS_DEPLOYMENT_ENVIRONMENT` | 无 | 如 `production` / `staging` |
-| `CLS_CONTENT_CAPTURE` | `off` | `off` / `hash` / `truncate` / `full` |
+| `CLS_CONTENT_CAPTURE` | `off` | 普通正文和工具内容：`off` / `hash` / `truncate` / `full` |
+| `CLS_REASONING_CAPTURE` | `off` | 模型推理正文独立策略：`off` / `hash` / `truncate` / `full` |
 | `CLS_MAX_CONTENT_BYTES` | `1100000` | 单个正文 Attribute 的字节上限，范围 256–1100000 |
 | `CLS_EXPORT_SCHEDULE_DELAY_MS` | `2000` | 批量导出间隔，范围 50–60000 |
 | `CLS_MAX_QUEUE_SIZE` | `4096` | 内存队列 Span 数，范围 256–65536 |
@@ -365,13 +366,16 @@ SDK 使用独立的 `SdkTracerProvider`，不替换宿主 `GlobalOpenTelemetry`�
 生产环境建议：
 
 ```bash
-export CLS_CONTENT_CAPTURE=off
+export CLS_CONTENT_CAPTURE=truncate
+export CLS_REASONING_CAPTURE=off
 export CLS_REACTOR_CONTEXT_HOOK=false
 ```
 
 重要边界：
 
-- `off` 不上传消息正文和工具参数/结果，但 Chat Span 仍包含稳定、无盐的输入消息 SHA-256；低熵内容可能被字典推断。如果合规要求禁止任何内容派生值，需要在接入前评估。
+- 普通正文与 Reasoning 策略互不继承；开启普通正文不会自动上传推理内容。
+- `CLS_REASONING_CAPTURE=off` 不上传推理原文或稳定 Hash，但仍记录存在性、块数、字节数和时序指标。
+- 普通正文 `off` 不上传消息正文和工具参数/结果，但 Chat Span 仍包含稳定、无盐的输入消息 SHA-256；低熵内容可能被字典推断。如果合规要求禁止任何普通内容派生值，需要在接入前评估。
 - `hash` 不是加密；它用于关联相同内容。
 - `truncate/full` 会上传脱敏后的正文；脱敏只能降低风险，不能保证识别所有业务秘密和个人数据。
 - `full` 仍受单字段 1.1 MB 硬上限保护。
@@ -425,7 +429,9 @@ export CLS_ENDPOINT='ap-shanghai.cls.tencentcs.com'
 export CLS_TOPIC_ID='<trace-topic-id>'
 export CLS_SECRET_ID='<secret-id>'
 export CLS_SECRET_KEY='<secret-key>'
-export CLS_CONTENT_CAPTURE=off
+export CLS_CONTENT_CAPTURE=truncate
+export CLS_REASONING_CAPTURE=off
+export TRAVEL_ENABLE_REASONING=true
 export TRAVEL_SESSION_ID='travel-session-001'
 export TRAVEL_USER_ID='customer-001'
 
@@ -459,13 +465,14 @@ export TRAVEL_USER_ID='customer-001'
 
 ### 看不到正文
 
-正文默认关闭。排障时可短期设置：
+普通正文和 Reasoning 默认关闭。只排查最终回答时可短期设置：
 
 ```bash
 export CLS_CONTENT_CAPTURE=truncate
+export CLS_REASONING_CAPTURE=off
 ```
 
-使用前先阅读隐私说明，排障后恢复 `off`。
+只有明确需要排查模型推理且已获得授权时，才临时设置 `CLS_REASONING_CAPTURE=truncate`。使用前先阅读隐私说明，排障后恢复 `off`。
 
 更多问题见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
 

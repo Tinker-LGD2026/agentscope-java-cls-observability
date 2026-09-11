@@ -65,7 +65,8 @@ Entry 顶层名称固定为 `enter_application`，不会拼接 `service.name`。
 
 | 环境变量 | 默认值 | 范围 | 说明 |
 |---|---:|---:|---|
-| `CLS_CONTENT_CAPTURE` | `off` | off/hash/truncate/full | 正文采集策略 |
+| `CLS_CONTENT_CAPTURE` | `off` | off/hash/truncate/full | 普通消息正文、工具参数和结果的采集策略 |
+| `CLS_REASONING_CAPTURE` | `off` | off/hash/truncate/full | 模型推理正文的独立采集策略 |
 | `CLS_MAX_CONTENT_BYTES` | `1100000` | 256–1100000 | 单个正文类 Attribute 的 UTF-8 字节上限 |
 
 模式：
@@ -76,6 +77,15 @@ Entry 顶层名称固定为 `enter_application`，不会拼接 `service.name`。
 | `hash` | 正文属性只保存完整内容 SHA-256 和原始字节数 |
 | `truncate` | 脱敏后采集，超预算时截断或摘要 |
 | `full` | 尽可能采集脱敏正文，但仍受同一硬预算限制 |
+
+普通正文和 Reasoning 模式互不继承。生产环境推荐：
+
+```bash
+export CLS_CONTENT_CAPTURE=truncate
+export CLS_REASONING_CAPTURE=off
+```
+
+这允许采集脱敏后的最终回答和工具内容，但不会上传模型推理原文或其稳定 Hash。`CLS_MAX_CONTENT_BYTES` 仍是最终消息 Attribute 的统一硬上限；预算不足时优先保留最终 Text，Reasoning 优先降级或移除。
 
 单字段预算分别应用于：
 

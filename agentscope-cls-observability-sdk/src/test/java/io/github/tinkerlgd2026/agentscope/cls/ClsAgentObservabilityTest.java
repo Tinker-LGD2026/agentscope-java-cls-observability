@@ -108,19 +108,31 @@ class ClsAgentObservabilityTest {
         observability.close();
 
         ObjectMapper json = new ObjectMapper();
-        assertThat(sink.records).isNotEmpty();
-        for (ClsSpanRecord record : sink.records) {
-            JsonNode attributes = json.readTree(record.attribute());
-            String kind = attributes.path("gen_ai.span.kind").asText();
-            if (List.of("entry", "agent", "chat").contains(kind)) {
-                assertThat(record.attribute())
-                        .doesNotContain("input-secret", "result-secret", "chat-secret");
-            }
-        }
-        assertThat(sink.records.stream()
-                        .map(ClsSpanRecord::attribute)
-                        .anyMatch(value -> value.contains("chat-visible")))
-                .isTrue();
+        Map<String, ClsSpanRecord> byKind =
+                sink.records.stream()
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        record -> {
+                                            try {
+                                                return json.readTree(record.attribute())
+                                                        .path("gen_ai.span.kind")
+                                                        .asText();
+                                            } catch (Exception exception) {
+                                                throw new IllegalArgumentException(exception);
+                                            }
+                                        },
+                                        record -> record,
+                                        (first, ignored) -> first));
+        assertThat(byKind).containsKeys("entry", "agent", "chat");
+        assertThat(byKind.get("entry").attribute())
+                .contains("input-visible", "result-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
+        assertThat(byKind.get("agent").attribute())
+                .contains("input-visible", "result-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
+        assertThat(byKind.get("chat").attribute())
+                .contains("input-visible", "chat-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
     }
 
     @Test

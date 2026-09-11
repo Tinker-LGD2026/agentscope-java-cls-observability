@@ -1,5 +1,7 @@
 package io.github.tinkerlgd2026.agentscope.cls.instrumentation;
 
+import static io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode.OFF;
+import static io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode.TRUNCATE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -11,6 +13,11 @@ import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentStartEvent;
 import io.agentscope.core.event.ModelCallEndEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.TextBlockEndEvent;
+import io.agentscope.core.event.TextBlockStartEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockEndEvent;
+import io.agentscope.core.event.ThinkingBlockStartEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
@@ -541,6 +548,169 @@ class ClsTracingMiddlewareTest {
     }
 
     @Test
+    void chatSpanCapturesProviderNeutralReasoningAndTextEventsInOrder() {
+        ClsTracingMiddleware capturing = middleware(TRUNCATE, TRUNCATE, 4096);
+        RuntimeContext context = validContext("session-reasoning");
+
+        capturing.onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of()),
+                        ignoredAgent ->
+                                capturing.onModelCall(
+                                        agent,
+                                        context,
+                                        new ModelCallInput(List.of(), List.of(), null, model),
+                                        ignoredModel -> Flux.just(
+                                                new ThinkingBlockStartEvent("reply", "think"),
+                                                new ThinkingBlockDeltaEvent("reply", "think", "inspect weather"),
+                                                new ThinkingBlockEndEvent("reply", "think"),
+                                                new TextBlockStartEvent("reply", "text"),
+                                                new TextBlockDeltaEvent("reply", "text", "take an umbrella"),
+                                                new TextBlockEndEvent("reply", "text"),
+                                                new ModelCallEndEvent(
+                                                        "reply", new ChatUsage(12, 8, 0, 0.2)))))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
+        String output = chat.getAttributes().get(stringKey("gen_ai.output.messages"));
+        assertThat(output.indexOf("inspect weather"))
+                .isLessThan(output.indexOf("take an umbrella"));
+        assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
+                .isTrue();
+        assertThat(chat.getAttributes().get(longKey("agentscope.reasoning.block_count")))
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void reasoningOffKeepsMetricsButDropsReasoningFromInputOutputAndHash() {
+        ClsTracingMiddleware quietReasoning = middleware(TRUNCATE, OFF, 4096);
+        RuntimeContext context = validContext("session-reasoning-off");
+        io.agentscope.core.message.Msg withReasoning =
+                io.agentscope.core.message.Msg.builder()
+                        .role(io.agentscope.core.message.MsgRole.ASSISTANT)
+                        .content(List.of(
+                                io.agentscope.core.message.ThinkingBlock.builder()
+                                        .thinking("historical-secret")
+                                        .build(),
+                                io.agentscope.core.message.TextBlock.builder()
+                                        .text("history-answer")
+                                        .build()))
+                        .build();
+        io.agentscope.core.message.Msg withoutReasoning =
+                io.agentscope.core.message.Msg.builder()
+                        .role(io.agentscope.core.message.MsgRole.ASSISTANT)
+                        .content(List.of(
+                                io.agentscope.core.message.TextBlock.builder()
+                                        .text("history-answer")
+                                        .build()))
+                        .build();
+
+        invokeReasoningCall(quietReasoning, context, List.of(withReasoning));
+        invokeReasoningCall(quietReasoning, context, List.of(withoutReasoning));
+
+        List<SpanData> chats =
+                exporter.getFinishedSpanItems().stream()
+                        .filter(span -> "chat".equals(kind(span)))
+                        .toList();
+        String firstInput = chats.get(0).getAttributes().get(stringKey("gen_ai.input.messages"));
+        String firstOutput = chats.get(0).getAttributes().get(stringKey("gen_ai.output.messages"));
+        assertThat(firstInput).contains("history-answer").doesNotContain("historical-secret");
+        assertThat(firstOutput).contains("take an umbrella").doesNotContain("inspect weather");
+        assertThat(chats.get(0).getAttributes().get(stringKey("gen_ai.input.messages.hash")))
+                .isEqualTo(chats.get(1).getAttributes().get(stringKey("gen_ai.input.messages.hash")));
+        assertThat(chats.get(0).getAttributes()
+                        .get(AttributeKey.booleanKey("agentscope.reasoning.present")))
+                .isTrue();
+        assertThat(chats.get(0).getAttributes().get(stringKey("agentscope.reasoning.capture_mode")))
+                .isEqualTo("off");
+    }
+
+    @Test
+    void unavailableReasoningUsageIsOmittedRatherThanReportedAsZero() {
+        ClsTracingMiddleware capturing = middleware(TRUNCATE, TRUNCATE, 4096);
+        invokeReasoningCall(capturing, validContext("session-token"), List.of());
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        SpanData chat = find(spans, "chat", null);
+        SpanData agentSpan = find(spans, "agent", null);
+        assertThat(chat.getAttributes().asMap().keySet())
+                .doesNotContain(longKey("gen_ai.usage.reasoning_output_tokens"));
+        assertThat(agentSpan.getAttributes().asMap().keySet())
+                .doesNotContain(longKey("gen_ai.usage.reasoning_output_tokens"));
+    }
+
+    @Test
+    void modelErrorKeepsReasoningMetricsWithoutLeakingOffContent() {
+        ClsTracingMiddleware quietReasoning = middleware(TRUNCATE, OFF, 4096);
+        RuntimeException businessError = new RuntimeException("model failed");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () ->
+                                quietReasoning
+                                        .onAgent(
+                                                agent,
+                                                validContext("session-error"),
+                                                new AgentInput(List.of()),
+                                                ignoredAgent ->
+                                                        quietReasoning.onModelCall(
+                                                                agent,
+                                                                validContext("session-error"),
+                                                                new ModelCallInput(
+                                                                        List.of(), List.of(), null, model),
+                                                                ignoredModel ->
+                                                                        Flux.concat(
+                                                                                Flux.just(
+                                                                                        new ThinkingBlockDeltaEvent(
+                                                                                                "reply", "think", "partial-secret")),
+                                                                                Flux.error(businessError))))
+                                        .collectList()
+                                        .block(Duration.ofSeconds(5)))
+                .isSameAs(businessError);
+
+        SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
+        assertThat(chat.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
+                .isTrue();
+        assertThat(chat.getAttributes().get(longKey("agentscope.reasoning.output_bytes")))
+                .isGreaterThan(0L);
+        assertThat(chat.getAttributes().get(stringKey("gen_ai.output.messages"))).isNull();
+    }
+
+    @Test
+    void modelCancellationFinalizesPartialReasoningMetrics() {
+        ClsTracingMiddleware quietReasoning = middleware(TRUNCATE, OFF, 4096);
+
+        quietReasoning
+                .onAgent(
+                        agent,
+                        validContext("session-cancel"),
+                        new AgentInput(List.of()),
+                        ignoredAgent ->
+                                quietReasoning.onModelCall(
+                                        agent,
+                                        validContext("session-cancel"),
+                                        new ModelCallInput(List.of(), List.of(), null, model),
+                                        ignoredModel ->
+                                                Flux.just(
+                                                        new ThinkingBlockDeltaEvent(
+                                                                "reply", "think", "cancelled-secret"),
+                                                        new TextBlockDeltaEvent(
+                                                                "reply", "text", "unused"))))
+                .take(1)
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        SpanData chat = find(exporter.getFinishedSpanItems(), "chat", null);
+        assertThat(chat.getAttributes().get(AttributeKey.booleanKey("agentscope.reasoning.present")))
+                .isTrue();
+        assertThat(chat.getAttributes().get(longKey("agentscope.reasoning.output_bytes")))
+                .isGreaterThan(0L);
+        assertThat(chat.getAttributes().get(stringKey("gen_ai.output.messages"))).isNull();
+    }
+
+    @Test
     void hashModeUsesCompleteStreamedModelOutput() throws Exception {
         ClsTracingMiddleware hashing =
                 new ClsTracingMiddleware(
@@ -805,6 +975,49 @@ class ClsTracingMiddlewareTest {
                                                         new ModelCallEndEvent(
                                                                 "reply-1",
                                                                 new ChatUsage(1, 1, 0.1)))))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+    }
+
+    private ClsTracingMiddleware middleware(
+            ContentCaptureMode contentMode,
+            ContentCaptureMode reasoningMode,
+            int maxBytes) {
+        ObjectMapper json = new ObjectMapper();
+        return new ClsTracingMiddleware(
+                provider.get("test"),
+                new ContentSanitizer(json, contentMode, maxBytes),
+                new io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy(
+                        json, contentMode, reasoningMode, maxBytes),
+                contentMode,
+                reasoningMode,
+                maxBytes,
+                active::get,
+                new io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters(),
+                json,
+                false);
+    }
+
+    private void invokeReasoningCall(
+            ClsTracingMiddleware target,
+            RuntimeContext context,
+            List<io.agentscope.core.message.Msg> inputMessages) {
+        target.onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of()),
+                        ignoredAgent ->
+                                target.onModelCall(
+                                        agent,
+                                        context,
+                                        new ModelCallInput(inputMessages, List.of(), null, model),
+                                        ignoredModel -> Flux.just(
+                                                new ThinkingBlockStartEvent("reply", "think"),
+                                                new ThinkingBlockDeltaEvent("reply", "think", "inspect weather"),
+                                                new ThinkingBlockEndEvent("reply", "think"),
+                                                new TextBlockDeltaEvent("reply", "text", "take an umbrella"),
+                                                new ModelCallEndEvent(
+                                                        "reply", new ChatUsage(12, 8, 0, 0.2)))))
                 .collectList()
                 .block(Duration.ofSeconds(5));
     }

@@ -24,7 +24,9 @@ import io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
@@ -81,6 +83,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
 
     private final Tracer tracer;
     private final ContentSanitizer contentSanitizer;
+    private final MessageCapturePolicy messageCapturePolicy;
+    private final ContentCaptureMode contentCaptureMode;
+    private final ContentCaptureMode reasoningCaptureMode;
+    private final int maxContentBytes;
     private final ObjectWriter canonicalWriter;
     private final AgentScopeMessageConverter messageConverter;
     private final BooleanSupplier active;
@@ -99,7 +105,21 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             ContentSanitizer contentSanitizer,
             BooleanSupplier active,
             TelemetryCounters counters) {
-        this(tracer, contentSanitizer, active, counters, JsonSupport.newObjectMapper(), false);
+        this(
+                tracer,
+                contentSanitizer,
+                new MessageCapturePolicy(
+                        JsonSupport.newObjectMapper(),
+                        contentSanitizer.mode(),
+                        ContentCaptureMode.OFF,
+                        contentSanitizer.maxBytes()),
+                contentSanitizer.mode(),
+                ContentCaptureMode.OFF,
+                contentSanitizer.maxBytes(),
+                active,
+                counters,
+                JsonSupport.newObjectMapper(),
+                false);
     }
 
     public ClsTracingMiddleware(
@@ -109,16 +129,50 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             TelemetryCounters counters,
             ObjectMapper objectMapper,
             boolean reactorContextHookEnabled) {
+        this(
+                tracer,
+                contentSanitizer,
+                new MessageCapturePolicy(
+                        objectMapper,
+                        contentSanitizer.mode(),
+                        ContentCaptureMode.OFF,
+                        contentSanitizer.maxBytes()),
+                contentSanitizer.mode(),
+                ContentCaptureMode.OFF,
+                contentSanitizer.maxBytes(),
+                active,
+                counters,
+                objectMapper,
+                reactorContextHookEnabled);
+    }
+
+    public ClsTracingMiddleware(
+            Tracer tracer,
+            ContentSanitizer contentSanitizer,
+            MessageCapturePolicy messageCapturePolicy,
+            ContentCaptureMode contentCaptureMode,
+            ContentCaptureMode reasoningCaptureMode,
+            int maxContentBytes,
+            BooleanSupplier active,
+            TelemetryCounters counters,
+            ObjectMapper objectMapper,
+            boolean reactorContextHookEnabled) {
         if (tracer == null
                 || contentSanitizer == null
+                || messageCapturePolicy == null
+                || contentCaptureMode == null
+                || reasoningCaptureMode == null
                 || active == null
                 || counters == null
                 || objectMapper == null) {
-            throw new IllegalArgumentException(
-                    "tracer, contentSanitizer, active, counters and objectMapper are required");
+            throw new IllegalArgumentException("CLS tracing dependencies are required");
         }
         this.tracer = tracer;
         this.contentSanitizer = contentSanitizer;
+        this.messageCapturePolicy = messageCapturePolicy;
+        this.contentCaptureMode = contentCaptureMode;
+        this.reasoningCaptureMode = reasoningCaptureMode;
+        this.maxContentBytes = maxContentBytes;
         this.active = active;
         this.counters = counters;
         this.canonicalWriter =
@@ -361,17 +415,29 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         }
         try {
             List<Map<String, Object>> inputMessages = messageConverter.convert(input.messages());
-            span.setAttribute("gen_ai.input.messages.hash", contentSanitizer.hash(inputMessages));
-            captureMessages(span, "gen_ai.input.messages", inputMessages);
+            MessageCapturePolicy.CapturedMessages captured =
+                    messageCapturePolicy.capture(inputMessages, true);
+            captured.observableHash()
+                    .ifPresent(hash -> span.setAttribute("gen_ai.input.messages.hash", hash));
+            captured.value()
+                    .ifPresent(
+                            node ->
+                                    span.setAttribute(
+                                            "gen_ai.input.messages", node.toString()));
         } catch (RuntimeException | StackOverflowError failure) {
             telemetryFailed(failure);
             span.setAttribute(
                     "gen_ai.input.messages.capture_error",
                     failure.getClass().getSimpleName());
         }
-        OutputTextAccumulator outputText = new OutputTextAccumulator();
-        AtomicBoolean modelUsedTools = new AtomicBoolean();
         long started = System.nanoTime();
+        OutputMessageAccumulator output =
+                new OutputMessageAccumulator(
+                        JsonSupport.newObjectMapper(),
+                        messageCapturePolicy,
+                        contentCaptureMode,
+                        reasoningCaptureMode,
+                        maxContentBytes);
         Context spanContext = span.storeInContext(Objects.requireNonNull(parent));
         Flux<AgentEvent> downstream;
         try {
@@ -393,8 +459,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                         applyModelEvent(
                                                                 span,
                                                                 event,
-                                                                outputText,
-                                                                modelUsedTools,
+                                                                output,
+                                                                started,
                                                                 agentFrame,
                                                                 step,
                                                                 modelName,
@@ -403,14 +469,22 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         "model call failed",
                         () -> {
                             setDuration(span, "gen_ai.chat.duration_ms", started);
-                            String finishReason = modelUsedTools.get() ? "tool_calls" : "stop";
+                            OutputMessageAccumulator.Result result =
+                                    output.finish(System.nanoTime() - started);
+                            String finishReason = result.usedTools() ? "tool_calls" : "stop";
                             span.setAttribute(
                                     Objects.requireNonNull(
                                             AttributeKey.stringArrayKey(
                                                     "gen_ai.response.finish_reasons")),
                                     List.of(finishReason));
                             span.setAttribute("gen_ai.react.finish_reason", finishReason);
-                            outputText.captureTo(span, "gen_ai.output.messages");
+                            result.messages()
+                                    .ifPresent(
+                                            node ->
+                                                    span.setAttribute(
+                                                            "gen_ai.output.messages",
+                                                            node.toString()));
+                            writeReasoningMetrics(span, result);
                         });
         return propagate(observed, spanContext);
     }
@@ -569,24 +643,31 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         .setAttribute(ClsFields.AGENT_NAME, agentFrame.agentName())
                         .setAttribute("gen_ai.agent.message_count", (long) agentMessages.size())
                         .startSpan();
-        if (contentSanitizer.isCapturing()) {
-            try {
-                List<Map<String, Object>> agentInputMessages =
-                        messageConverter.convert(agentMessages);
-                captureMessages(agentSpan, "gen_ai.input.messages", agentInputMessages);
-                if (entry != null) {
-                    captureMessages(entry, "gen_ai.input.messages", agentInputMessages);
-                }
-            } catch (RuntimeException | StackOverflowError failure) {
-                telemetryFailed(failure);
-                agentSpan.setAttribute(
+        Span inputEntry = entry;
+        try {
+            List<Map<String, Object>> agentInputMessages =
+                    messageConverter.convert(agentMessages);
+            MessageCapturePolicy.CapturedMessages captured =
+                    messageCapturePolicy.capture(agentInputMessages, false);
+            captured.value()
+                    .ifPresent(
+                            node -> {
+                                agentSpan.setAttribute(
+                                        "gen_ai.input.messages", node.toString());
+                                if (inputEntry != null) {
+                                    inputEntry.setAttribute(
+                                            "gen_ai.input.messages", node.toString());
+                                }
+                            });
+        } catch (RuntimeException | StackOverflowError failure) {
+            telemetryFailed(failure);
+            agentSpan.setAttribute(
+                    "gen_ai.input.messages.capture_error",
+                    failure.getClass().getSimpleName());
+            if (entry != null) {
+                entry.setAttribute(
                         "gen_ai.input.messages.capture_error",
                         failure.getClass().getSimpleName());
-                if (entry != null) {
-                    entry.setAttribute(
-                            "gen_ai.input.messages.capture_error",
-                            failure.getClass().getSimpleName());
-                }
             }
         }
         Context spanContext = agentSpan.storeInContext(Objects.requireNonNull(agentParent));
@@ -658,15 +739,21 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     }
 
     private void captureAgentResult(Span agentSpan, @Nullable Span entry, AgentEvent event) {
-        if (!(event instanceof AgentResultEvent result) || !contentSanitizer.isCapturing()) {
+        if (!(event instanceof AgentResultEvent result)) {
             return;
         }
         List<Map<String, Object>> outputMessages =
                 List.of(messageConverter.convert(result.getResult()));
-        captureMessages(agentSpan, "gen_ai.output.messages", outputMessages);
-        if (entry != null) {
-            captureMessages(entry, "gen_ai.output.messages", outputMessages);
-        }
+        messageCapturePolicy
+                .capture(outputMessages, false)
+                .value()
+                .ifPresent(
+                        node -> {
+                            agentSpan.setAttribute("gen_ai.output.messages", node.toString());
+                            if (entry != null) {
+                                entry.setAttribute("gen_ai.output.messages", node.toString());
+                            }
+                        });
     }
 
     private <I> Flux<AgentEvent> guarded(
@@ -797,20 +884,14 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private void applyModelEvent(
             Span span,
             AgentEvent event,
-            OutputTextAccumulator outputText,
-            AtomicBoolean modelUsedTools,
+            OutputMessageAccumulator output,
+            long startedNanos,
             InvocationState.AgentFrame agentFrame,
             InvocationState.@Nullable StepFrame step,
             String modelName,
             String providerName) {
-        if (event instanceof TextBlockDeltaEvent text) {
-            if (contentSanitizer.isCapturing()) {
-                outputText.append(text.getDelta());
-            }
-            return;
-        }
+        output.accept(event, System.nanoTime() - startedNanos);
         if (event instanceof ToolCallStartEvent toolCall) {
-            modelUsedTools.set(true);
             if (step != null) {
                 agentFrame.registerToolContext(
                         toolCall.getToolCallId(), step, modelName, providerName);
@@ -831,8 +912,35 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         span.setAttribute("gen_ai.usage.cache_creation.input_tokens", 0L);
         span.setAttribute(
                 "gen_ai.usage.cache_miss.input_tokens", Math.max(0L, inputTokens - cacheReadTokens));
-        span.setAttribute("gen_ai.usage.reasoning_output_tokens", 0L);
         agentFrame.addUsage(inputTokens, outputTokens, cacheReadTokens);
+    }
+
+    private void writeReasoningMetrics(
+            Span span, OutputMessageAccumulator.Result result) {
+        OutputMessageAccumulator.ReasoningMetrics reasoning = result.reasoning();
+        span.setAttribute("agentscope.reasoning.present", reasoning.present());
+        span.setAttribute("agentscope.reasoning.block_count", reasoning.blockCount());
+        span.setAttribute("agentscope.reasoning.output_bytes", reasoning.outputBytes());
+        span.setAttribute("agentscope.reasoning.duration_ms", reasoning.durationMs());
+        span.setAttribute(
+                "agentscope.reasoning.capture_mode",
+                reasoningCaptureMode.name().toLowerCase(Locale.ROOT));
+        span.setAttribute("agentscope.reasoning.truncated", reasoning.truncated());
+        span.setAttribute(
+                "agentscope.reasoning.malformed_event_count",
+                reasoning.malformedEventCount());
+        reasoning.timeToFirstTokenMs()
+                .ifPresent(
+                        value ->
+                                span.setAttribute(
+                                        "agentscope.reasoning.time_to_first_token_ms",
+                                        value));
+        result.responseTimeToFirstTokenMs()
+                .ifPresent(
+                        value ->
+                                span.setAttribute(
+                                        "agentscope.response.time_to_first_token_ms",
+                                        value));
     }
 
     private static void applyToolEvent(Map<String, List<ToolSpan>> tools, AgentEvent event) {
@@ -1091,60 +1199,6 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             Flux<AgentEvent> result = delegate.apply(input);
             downstream = result;
             return result;
-        }
-    }
-
-    /** Collects streamed model text without letting a long generation grow without bound. */
-    private final class OutputTextAccumulator {
-        private final StringBuilder text = new StringBuilder();
-        private final StreamingDigest digest = new StreamingDigest(false);
-        private boolean truncated;
-
-        private void append(@Nullable String delta) {
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            if (contentSanitizer.isHashOnly()) {
-                digest.updateText(delta);
-                return;
-            }
-            int budget = contentSanitizer.maxBytes();
-            if (text.length() >= budget) {
-                truncated = true;
-                return;
-            }
-            int allowed = Math.min(delta.length(), budget - text.length());
-            text.append(delta, 0, allowed);
-            if (allowed < delta.length()) {
-                truncated = true;
-            }
-        }
-
-        private void captureTo(Span span, String key) {
-            if (contentSanitizer.isHashOnly()) {
-                if (digest.originalBytes() > 0) {
-                    span.setAttribute(
-                            Objects.requireNonNull(key),
-                            contentSanitizer
-                                    .streamedMessageHash(
-                                            "assistant", digest.hexDigest(), digest.originalBytes())
-                                    .toString());
-                }
-                return;
-            }
-            if (text.isEmpty()) {
-                return;
-            }
-            Map<String, Object> part = new LinkedHashMap<>();
-            part.put("type", "text");
-            part.put("content", text.toString());
-            if (truncated) {
-                part.put("truncated", true);
-            }
-            Map<String, Object> message = new LinkedHashMap<>();
-            message.put("role", "assistant");
-            message.put("parts", List.of(part));
-            captureMessages(span, key, List.of(message));
         }
     }
 

@@ -190,7 +190,6 @@ final class InvocationState {
             span.setAttribute("gen_ai.usage.total_tokens", inputTokens.get() + outputTokens.get());
             span.setAttribute("gen_ai.usage.cache_read.input_tokens", cacheReadTokens.get());
             span.setAttribute("gen_ai.usage.cache_creation.input_tokens", 0L);
-            span.setAttribute("gen_ai.usage.reasoning_output_tokens", 0L);
         }
     }
 

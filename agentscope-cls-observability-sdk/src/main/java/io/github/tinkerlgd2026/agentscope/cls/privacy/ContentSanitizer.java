@@ -99,6 +99,10 @@ public final class ContentSanitizer {
         return mode == ContentCaptureMode.HASH;
     }
 
+    public ContentCaptureMode mode() {
+        return mode;
+    }
+
     /** Builds a CLS message array from a digest computed over the complete streamed text. */
     public ArrayNode streamedMessageHash(String role, String sha256, long originalBytes) {
         ArrayNode messages = objectMapper.createArrayNode();

@@ -15,6 +15,29 @@ import org.junit.jupiter.api.Test;
 class AgentScopeMessageConverterTest {
 
     @Test
+    void neverCopiesThinkingProviderMetadata() {
+        Msg assistant =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(
+                                List.of(
+                                        ThinkingBlock.builder()
+                                                .thinking("visible reasoning")
+                                                .metadata(
+                                                        Map.of(
+                                                                "signature", "provider-signature",
+                                                                "encrypted", "opaque-ciphertext"))
+                                                .build()))
+                        .build();
+
+        String converted = new AgentScopeMessageConverter().convert(List.of(assistant)).toString();
+
+        assertThat(converted)
+                .contains("visible reasoning")
+                .doesNotContain("provider-signature", "opaque-ciphertext", "metadata");
+    }
+
+    @Test
     void convertsAgentScopeMessagesToClsRolePartsSchema() {
         Msg user =
                 Msg.builder()

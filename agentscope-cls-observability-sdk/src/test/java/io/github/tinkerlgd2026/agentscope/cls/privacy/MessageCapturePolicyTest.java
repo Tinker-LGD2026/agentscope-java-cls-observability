@@ -276,6 +276,45 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void minimalTextPrefixRespectsUtf8Boundaries() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+
+        JsonNode captured =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "text",
+                                                "content", "中".repeat(100) + "😀" + "x")),
+                                false)
+                        .value()
+                        .orElseThrow();
+
+        String content = captured.at("/0/parts/0/content").asText();
+        assertThat(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(64);
+        assertThat(content).doesNotContain("\uFFFD");
+        assertThat(captured.at("/0/parts/0/truncated").asBoolean()).isTrue();
+    }
+
+    @Test
+    void minimalTextDoesNotMarkShortContentAsTruncated() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+
+        JsonNode captured =
+                policy.capture(
+                                messages(Map.of("type", "text", "content", "short")),
+                                false)
+                        .value()
+                        .orElseThrow();
+
+        assertThat(captured.at("/0/parts/0/truncated").isMissingNode()).isTrue();
+    }
+
+    @Test
     void finalBudgetKeepsATypePreservingTruncatedLatestTextWhenItAloneIsLong() {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

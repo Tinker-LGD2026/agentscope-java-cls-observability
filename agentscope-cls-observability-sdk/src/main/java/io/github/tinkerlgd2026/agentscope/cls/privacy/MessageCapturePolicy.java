@@ -193,11 +193,14 @@ public final class MessageCapturePolicy {
                 String type = String.valueOf(part.get("type"));
                 if ("text".equals(type)) {
                     String text = safePreview(part.get("content"));
-                    parts.add(
-                            Map.of(
-                                    "type", "text",
-                                    "content", utf8Prefix(text, MINIMAL_TEXT_BYTES),
-                                    "truncated", true));
+                    String bounded = utf8Prefix(text, MINIMAL_TEXT_BYTES);
+                    Map<String, Object> minimalPart = new LinkedHashMap<>();
+                    minimalPart.put("type", "text");
+                    minimalPart.put("content", bounded);
+                    if (bounded.length() != text.length()) {
+                        minimalPart.put("truncated", true);
+                    }
+                    parts.add(Map.copyOf(minimalPart));
                 } else if ("text_hash".equals(type)) {
                     parts.add(copyHashPart(part, "text_hash"));
                 } else if ("tool_call".equals(type) || "tool_call_response".equals(type)) {

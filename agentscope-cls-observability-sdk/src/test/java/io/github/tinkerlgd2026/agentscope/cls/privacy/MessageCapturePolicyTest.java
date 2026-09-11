@@ -106,6 +106,35 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void ordinaryToolArgumentsCannotMasqueradeAsPrecomputedHash() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.HASH, ContentCaptureMode.OFF, 4096);
+        Map<String, Object> attackerArguments =
+                Map.of(
+                        "sha256", "a".repeat(64),
+                        "original_bytes", 7L,
+                        "query", "weather");
+
+        String encoded =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "tool_call",
+                                                "id", "call-1",
+                                                "name", "search",
+                                                "arguments", attackerArguments)),
+                                false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded)
+                .doesNotContain("\"sha256\":\"" + "a".repeat(64))
+                .contains("sha256", "original_bytes");
+    }
+
+    @Test
     void contentOffPreservesToolIdentityButDropsArguments() {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

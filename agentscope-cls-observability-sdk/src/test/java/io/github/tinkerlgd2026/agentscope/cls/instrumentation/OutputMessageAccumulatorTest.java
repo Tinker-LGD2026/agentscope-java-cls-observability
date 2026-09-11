@@ -206,7 +206,7 @@ class OutputMessageAccumulatorTest {
         OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 256);
         accumulator.accept(
                 new ThinkingBlockDeltaEvent(
-                        "reply", "think", "authorization=x ".repeat(12)),
+                        "reply", "think", "token=abcdef ".repeat(11)),
                 1_000_000L);
         accumulator.accept(
                 new TextBlockDeltaEvent("reply", "text", "final-answer"),
@@ -216,7 +216,7 @@ class OutputMessageAccumulatorTest {
         JsonNode messages = result.messages().orElseThrow();
 
         assertThat(JSON.writeValueAsBytes(messages).length).isLessThanOrEqualTo(256);
-        assertThat(messages.toString()).contains("final-answer").doesNotContain("authorization=x");
+        assertThat(messages.toString()).contains("final-answer").doesNotContain("token=abcdef");
         assertThat(result.reasoning().truncated()).isTrue();
     }
 
@@ -249,6 +249,55 @@ class OutputMessageAccumulatorTest {
 
         assertThat(result.reasoning().blockCount()).isEqualTo(2);
         assertThat(result.messages().orElseThrow().toString()).contains("first", "second");
+    }
+
+    @Test
+    void handlesExactUtf8BudgetBoundariesWithoutSplittingCodePoints() throws Exception {
+        for (String text : new String[] {
+            "a".repeat(252) + "中",
+            "a".repeat(253) + "中",
+            "a".repeat(254) + "中"
+        }) {
+            OutputMessageAccumulator accumulator = accumulator(FULL, OFF, 256);
+            accumulator.accept(
+                    new TextBlockDeltaEvent("reply", "text-" + text.length(), text),
+                    1_000_000L);
+            JsonNode messages = accumulator.finish(2_000_000L).messages().orElseThrow();
+            assertThat(JSON.writeValueAsBytes(messages).length).isLessThanOrEqualTo(256);
+            assertThat(messages.toString()).doesNotContain("�");
+        }
+    }
+
+    @Test
+    void closesLoneHighSurrogateWithoutThrowingOrSplittingValidText() {
+        OutputMessageAccumulator accumulator = accumulator(TRUNCATE, TRUNCATE, 4096);
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think", String.valueOf('\uD83D')),
+                1_000_000L);
+        accumulator.accept(
+                new TextBlockDeltaEvent("reply", "text", "answer"),
+                2_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(3_000_000L);
+
+        assertThat(result.messages().orElseThrow().toString()).contains("answer");
+        assertThat(result.reasoning().outputBytes()).isGreaterThan(0);
+    }
+
+    @Test
+    void rejectsCrossTypeReuseOfTheSameReplyAndBlockKey() {
+        OutputMessageAccumulator accumulator = accumulator(TRUNCATE, TRUNCATE, 4096);
+        accumulator.accept(new ThinkingBlockStartEvent("reply", "same"), 1_000_000L);
+        accumulator.accept(new TextBlockStartEvent("reply", "same"), 2_000_000L);
+        accumulator.accept(new TextBlockDeltaEvent("reply", "same", "late-text"), 3_000_000L);
+        accumulator.accept(new ThinkingBlockDeltaEvent("reply", "same", "plan"), 4_000_000L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(5_000_000L);
+
+        assertThat(result.messages().orElseThrow().toString())
+                .contains("plan")
+                .doesNotContain("late-text");
+        assertThat(result.reasoning().malformedEventCount()).isEqualTo(2);
     }
 
     @Test

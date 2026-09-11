@@ -103,11 +103,15 @@ final class OutputMessageAccumulator {
             reasoningBlocks.values().forEach(StreamPart::forceHash);
             parts = withoutReasoning(parts);
         }
-        List<Map<String, Object>> messages =
-                parts.isEmpty()
-                        ? List.of()
-                        : List.of(Map.of("role", "assistant", "parts", parts));
+        boolean textExpected = hasText(parts);
+        boolean reasoningIncluded = hasReasoning(parts);
+        List<Map<String, Object>> messages = messages(parts);
         MessageCapturePolicy.CapturedMessages capture = capturePolicy.capture(messages, false);
+        if (textExpected && reasoningIncluded && !capturedHasText(capture.value())) {
+            reasoningBlocks.values().forEach(StreamPart::forceHash);
+            parts = withoutReasoning(parts);
+            capture = capturePolicy.capture(messages(parts), false);
+        }
         long reasoningBytes = reasoningBlocks.values().stream().mapToLong(StreamPart::originalBytes).sum();
         long reasoningDurationNanos =
                 reasoningBlocks.values().stream().mapToLong(StreamPart::durationNanos).sum();
@@ -275,6 +279,40 @@ final class OutputMessageAccumulator {
         } catch (JsonProcessingException exception) {
             return Integer.MAX_VALUE;
         }
+    }
+
+    private static List<Map<String, Object>> messages(List<Map<String, Object>> parts) {
+        return parts.isEmpty()
+                ? List.of()
+                : List.of(Map.of("role", "assistant", "parts", parts));
+    }
+
+    private static boolean hasText(List<Map<String, Object>> parts) {
+        return parts.stream()
+                .anyMatch(
+                        part -> {
+                            Object type = part.get("type");
+                            return "text".equals(type) || "text_hash".equals(type);
+                        });
+    }
+
+    private static boolean capturedHasText(Optional<JsonNode> messages) {
+        if (messages.isEmpty() || !messages.orElseThrow().isArray()) {
+            return false;
+        }
+        for (JsonNode message : messages.orElseThrow()) {
+            JsonNode parts = message.get("parts");
+            if (parts == null || !parts.isArray()) {
+                continue;
+            }
+            for (JsonNode part : parts) {
+                String type = part.path("type").asText();
+                if ("text".equals(type) || "text_hash".equals(type)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean hasVisibleReasoning(List<Map<String, Object>> parts) {
@@ -526,10 +564,9 @@ final class OutputMessageAccumulator {
         return Map.copyOf(result);
     }
 
-    private static Map<String, Object> hashEnvelope(PayloadBuffer payload) {
-        return Map.of(
-                "sha256", payload.digestHex(),
-                "original_bytes", payload.originalBytes);
+    private static MessageCapturePolicy.PrecomputedHash hashEnvelope(PayloadBuffer payload) {
+        return new MessageCapturePolicy.PrecomputedHash(
+                payload.digestHex(), payload.originalBytes);
     }
 
     private static MessageDigest digest() {

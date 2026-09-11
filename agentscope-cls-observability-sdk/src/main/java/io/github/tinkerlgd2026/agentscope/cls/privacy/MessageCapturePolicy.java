@@ -129,8 +129,8 @@ public final class MessageCapturePolicy {
     private Map<String, Object> captureToolCall(Map<String, Object> part) {
         Map<String, Object> result = toolIdentity(part, true);
         Object arguments = part.get("arguments");
-        if (contentMode == ContentCaptureMode.HASH && isHashEnvelope(arguments)) {
-            result.put("arguments", copyHashEnvelope((Map<?, ?>) arguments));
+        if (contentMode == ContentCaptureMode.HASH && arguments instanceof PrecomputedHash hash) {
+            result.put("arguments", hash.asMap());
         } else {
             contentSanitizer
                     .capture(arguments)
@@ -215,18 +215,6 @@ public final class MessageCapturePolicy {
         return List.copyOf(result);
     }
 
-    private static boolean isHashEnvelope(@Nullable Object value) {
-        return value instanceof Map<?, ?> map
-                && map.get("sha256") instanceof String
-                && map.get("original_bytes") instanceof Number;
-    }
-
-    private static Map<String, Object> copyHashEnvelope(Map<?, ?> source) {
-        return Map.of(
-                "sha256", nonNullValue(source.get("sha256"), ""),
-                "original_bytes", nonNullValue(source.get("original_bytes"), 0L));
-    }
-
     private static Map<String, Object> copyHashPart(
             Map<String, Object> source, String expectedType) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -260,6 +248,22 @@ public final class MessageCapturePolicy {
 
     private static Map<String, Object> copy(Map<String, Object> source) {
         return Map.copyOf(new LinkedHashMap<>(source));
+    }
+
+    public record PrecomputedHash(String sha256, long originalBytes) {
+        public PrecomputedHash {
+            sha256 = Objects.requireNonNull(sha256, "sha256");
+            if (!sha256.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException("sha256 must be 64 lowercase hex characters");
+            }
+            if (originalBytes < 0) {
+                throw new IllegalArgumentException("originalBytes must be non-negative");
+            }
+        }
+
+        Map<String, Object> asMap() {
+            return Map.of("sha256", sha256, "original_bytes", originalBytes);
+        }
     }
 
     public record CapturedMessages(

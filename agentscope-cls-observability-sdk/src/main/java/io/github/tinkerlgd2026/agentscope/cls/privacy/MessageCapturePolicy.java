@@ -12,6 +12,10 @@ import org.jspecify.annotations.Nullable;
 
 /** Applies independent privacy policies to ordinary and reasoning message parts. */
 public final class MessageCapturePolicy {
+    private static final int MAX_REASONING_PARTS = 8;
+    private static final int MAX_CONTENT_PARTS = 16;
+    private static final int MAX_TOOL_PARTS = 8;
+
     private final ObjectMapper objectMapper;
     private final ContentCaptureMode contentMode;
     private final ContentCaptureMode reasoningMode;
@@ -37,17 +41,67 @@ public final class MessageCapturePolicy {
             @Nullable List<Map<String, Object>> messages, boolean includeObservableHash) {
         List<Map<String, Object>> source = messages == null ? List.of() : messages;
         try {
-            List<Map<String, Object>> hashBasis = hashBasis(source);
+            List<Map<String, Object>> boundedSource = boundedMessages(source);
+            List<Map<String, Object>> hashBasis = hashBasis(boundedSource);
             Optional<String> observableHash =
                     includeObservableHash
                             ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
                             : Optional.empty();
-            List<Map<String, Object>> captured = captureMessages(source);
+            List<Map<String, Object>> captured = captureMessages(boundedSource);
             Optional<JsonNode> value = captureWithPriority(captured);
             return new CapturedMessages(value, observableHash);
         } catch (RuntimeException | StackOverflowError failure) {
             return new CapturedMessages(Optional.empty(), Optional.empty());
         }
+    }
+
+    private List<Map<String, Object>> boundedMessages(List<Map<String, Object>> messages) {
+        SelectionLimits limits = new SelectionLimits();
+        List<Map<String, Object>> bounded = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            if (message == null) {
+                continue;
+            }
+            List<Map<String, Object>> parts = boundedParts(message.get("parts"), limits);
+            if (parts.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            copy.put("role", nonNullValue(message.get("role"), "unknown"));
+            if (message.get("name") != null) {
+                copy.put("name", message.get("name"));
+            }
+            copy.put("parts", parts);
+            bounded.add(Map.copyOf(copy));
+        }
+        return List.copyOf(bounded);
+    }
+
+    private List<Map<String, Object>> boundedParts(
+            @Nullable Object value, SelectionLimits limits) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> bounded = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> part = (Map<String, Object>) raw;
+            String type = String.valueOf(part.getOrDefault("type", "unknown"));
+            if (!limits.tryAcquire(type)) {
+                continue;
+            }
+            if ("tool_call_response".equals(type)) {
+                Map<String, Object> nested = new LinkedHashMap<>(part);
+                nested.put("result", boundedParts(part.get("result"), limits));
+                bounded.add(Map.copyOf(nested));
+            } else {
+                bounded.add(part);
+            }
+        }
+        return List.copyOf(bounded);
     }
 
     private Optional<JsonNode> captureWithPriority(List<Map<String, Object>> captured) {
@@ -358,6 +412,34 @@ public final class MessageCapturePolicy {
 
     private static Map<String, Object> copy(Map<String, Object> source) {
         return Map.copyOf(new LinkedHashMap<>(source));
+    }
+
+    private static final class SelectionLimits {
+        private int reasoningParts;
+        private int contentParts;
+        private int toolParts;
+
+        private boolean tryAcquire(String type) {
+            if ("reasoning".equals(type) || "reasoning_hash".equals(type)) {
+                if (reasoningParts >= MAX_REASONING_PARTS) {
+                    return false;
+                }
+                reasoningParts++;
+                return true;
+            }
+            if ("tool_call".equals(type) || "tool_call_response".equals(type)) {
+                if (toolParts >= MAX_TOOL_PARTS) {
+                    return false;
+                }
+                toolParts++;
+                return true;
+            }
+            if (contentParts >= MAX_CONTENT_PARTS) {
+                return false;
+            }
+            contentParts++;
+            return true;
+        }
     }
 
     public record PrecomputedHash(String sha256, long originalBytes) {

@@ -154,21 +154,21 @@ class OutputMessageAccumulatorTest {
                     new ThinkingBlockDeltaEvent(
                             "reply", "think-" + index, "r".repeat(128)),
                     index + 1L);
-            accumulator.accept(
-                    new TextBlockDeltaEvent(
-                            "reply", "text-" + index, "t".repeat(128)),
-                    index + 1L);
-            accumulator.accept(
-                    new ToolCallDeltaEvent(
-                            "reply", "tool-" + index, "search", "a".repeat(128)),
-                    index + 1L);
         }
+        accumulator.accept(
+                new TextBlockDeltaEvent("reply", "final-text", "final-answer"),
+                500L);
+        accumulator.accept(
+                new ToolCallStartEvent("reply", "final-tool", "search"),
+                501L);
 
         OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+        String output = result.messages().orElseThrow().toString();
 
-        assertThat(result.reasoning().blockCount()).isLessThanOrEqualTo(256);
+        assertThat(result.reasoning().blockCount()).isLessThanOrEqualTo(128);
         assertThat(result.reasoning().malformedEventCount()).isGreaterThan(0);
         assertThat(accumulator.retainedPayloadBytes()).isLessThanOrEqualTo(3L * 1024L);
+        assertThat(output).contains("final-answer", "final-tool", "search");
     }
 
     @Test

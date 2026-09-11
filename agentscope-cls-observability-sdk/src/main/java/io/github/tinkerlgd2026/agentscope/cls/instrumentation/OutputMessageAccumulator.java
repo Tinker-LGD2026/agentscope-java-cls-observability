@@ -35,6 +35,9 @@ import java.util.OptionalLong;
 /** Collects provider-neutral model output blocks while preserving first-seen order. */
 final class OutputMessageAccumulator {
     private static final int MAX_PARTS = 256;
+    private static final int MAX_REASONING_PARTS = 128;
+    private static final int MAX_TEXT_PARTS = 96;
+    private static final int MAX_TOOL_PARTS = 32;
     private static final int METADATA_MAX_BYTES = 256;
     private static final int ENCODING_CHUNK_CHARS = 4096;
 
@@ -288,11 +291,27 @@ final class OutputMessageAccumulator {
         if (existing != null) {
             return existing == kind;
         }
-        if (lifecycleTypes.size() >= MAX_PARTS) {
+        if (lifecycleTypes.size() >= MAX_PARTS || partCount(kind) >= partLimit(kind)) {
             return false;
         }
         lifecycleTypes.put(key, kind);
         return true;
+    }
+
+    private int partCount(PartKind kind) {
+        return switch (kind) {
+            case REASONING -> reasoningBlocks.size();
+            case TEXT -> textBlocks.size();
+            case TOOL -> toolCalls.size();
+        };
+    }
+
+    private static int partLimit(PartKind kind) {
+        return switch (kind) {
+            case REASONING -> MAX_REASONING_PARTS;
+            case TEXT -> MAX_TEXT_PARTS;
+            case TOOL -> MAX_TOOL_PARTS;
+        };
     }
 
     private void incrementMalformedEvents() {
@@ -593,14 +612,22 @@ final class OutputMessageAccumulator {
             if (delta == null || delta.isEmpty()) {
                 return;
             }
-            String value =
-                    pendingHighSurrogate == 0 ? delta : pendingHighSurrogate + delta;
-            pendingHighSurrogate = 0;
-            if (!value.isEmpty() && Character.isHighSurrogate(value.charAt(value.length() - 1))) {
-                pendingHighSurrogate = value.charAt(value.length() - 1);
-                value = value.substring(0, value.length() - 1);
+            int start = 0;
+            if (pendingHighSurrogate != 0) {
+                if (Character.isLowSurrogate(delta.charAt(0))) {
+                    appendComplete(new String(new char[] {pendingHighSurrogate, delta.charAt(0)}));
+                    start = 1;
+                } else {
+                    appendComplete(String.valueOf(pendingHighSurrogate));
+                }
+                pendingHighSurrogate = 0;
             }
-            appendComplete(value);
+            int end = delta.length();
+            if (start < end && Character.isHighSurrogate(delta.charAt(end - 1))) {
+                pendingHighSurrogate = delta.charAt(end - 1);
+                end--;
+            }
+            appendComplete(delta, start, end);
         }
 
         void finish() {
@@ -611,12 +638,13 @@ final class OutputMessageAccumulator {
         }
 
         private void appendComplete(String value) {
-            if (value.isEmpty()) {
-                return;
-            }
-            for (int start = 0; start < value.length(); ) {
-                int end = Math.min(value.length(), start + ENCODING_CHUNK_CHARS);
-                if (end < value.length() && Character.isHighSurrogate(value.charAt(end - 1))) {
+            appendComplete(value, 0, value.length());
+        }
+
+        private void appendComplete(String value, int initialStart, int finalEnd) {
+            for (int start = initialStart; start < finalEnd; ) {
+                int end = Math.min(finalEnd, start + ENCODING_CHUNK_CHARS);
+                if (end < finalEnd && Character.isHighSurrogate(value.charAt(end - 1))) {
                     end--;
                 }
                 String chunk = value.substring(start, end);

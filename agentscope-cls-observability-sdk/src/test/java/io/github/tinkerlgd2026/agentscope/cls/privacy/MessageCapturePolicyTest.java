@@ -230,6 +230,31 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void boundedSelectionSkipsExcessLowPriorityPayloadsAndKeepsFinalText() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.FULL, 4096);
+        List<Map<String, Object>> parts = new ArrayList<>();
+        for (int index = 0; index < 40; index++) {
+            parts.add(
+                    Map.of(
+                            "type", "reasoning",
+                            "content", index == 39 ? new ExplosiveValue() : "plan-" + index));
+        }
+        parts.add(Map.of("type", "text", "content", "final-answer"));
+
+        String encoded =
+                policy.capture(
+                                List.of(Map.of("role", "assistant", "parts", parts)),
+                                false)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+
+        assertThat(encoded).contains("final-answer");
+    }
+
+    @Test
     void finalBudgetPreservesTextAndToolIdentityBeforeToolArguments() {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

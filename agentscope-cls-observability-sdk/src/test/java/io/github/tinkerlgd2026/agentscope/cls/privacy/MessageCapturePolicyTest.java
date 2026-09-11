@@ -239,19 +239,67 @@ class MessageCapturePolicyTest {
             parts.add(
                     Map.of(
                             "type", "reasoning",
-                            "content", index == 39 ? new ExplosiveValue() : "plan-" + index));
+                            "content", index == 0 ? new ExplosiveValue() : "plan-" + index));
         }
         parts.add(Map.of("type", "text", "content", "final-answer"));
 
         String encoded =
                 policy.capture(
                                 List.of(Map.of("role", "assistant", "parts", parts)),
+                                true)
+                        .value()
+                        .orElseThrow()
+                        .toString();
+        MessageCapturePolicy.CapturedMessages captured =
+                policy.capture(List.of(Map.of("role", "assistant", "parts", parts)), true);
+
+        assertThat(encoded).contains("final-answer");
+        assertThat(captured.observableHash()).isEmpty();
+    }
+
+    @Test
+    void contentQuotaKeepsLatestTextAndOmitsIncompleteObservableHash() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.TRUNCATE, ContentCaptureMode.OFF, 4096);
+        List<Map<String, Object>> parts = new ArrayList<>();
+        for (int index = 0; index < 40; index++) {
+            parts.add(Map.of("type", "text", "content", "old-" + index));
+        }
+        parts.add(Map.of("type", "text", "content", "final-answer"));
+
+        MessageCapturePolicy.CapturedMessages captured =
+                policy.capture(List.of(Map.of("role", "assistant", "parts", parts)), true);
+
+        assertThat(captured.value().orElseThrow().toString()).contains("final-answer");
+        assertThat(captured.observableHash()).isEmpty();
+    }
+
+    @Test
+    void toolOnlyBudgetKeepsIdentityAfterDroppingReasoningAndArguments() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.FULL, 256);
+
+        String encoded =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "reasoning",
+                                                "content", "private-plan".repeat(100)),
+                                        Map.of(
+                                                "type", "tool_call",
+                                                "id", "call-final",
+                                                "name", "search",
+                                                "arguments", "private-argument".repeat(100))),
                                 false)
                         .value()
                         .orElseThrow()
                         .toString();
 
-        assertThat(encoded).contains("final-answer");
+        assertThat(encoded)
+                .contains("tool_call", "call-final", "search")
+                .doesNotContain("private-plan", "private-argument");
     }
 
     @Test

@@ -759,7 +759,8 @@ class ClsTracingMiddlewareTest {
         @SuppressWarnings("unchecked")
         List<io.agentscope.core.message.Msg> brokenMessages = mock(List.class);
         when(brokenMessages.isEmpty()).thenReturn(false);
-        when(brokenMessages.iterator())
+        when(brokenMessages.size()).thenReturn(1);
+        when(brokenMessages.get(0))
                 .thenThrow(new IllegalStateException("payload conversion failed"));
         ModelCallEndEvent modelEnd = new ModelCallEndEvent("reply-1", new ChatUsage(1, 1, 0.1));
 

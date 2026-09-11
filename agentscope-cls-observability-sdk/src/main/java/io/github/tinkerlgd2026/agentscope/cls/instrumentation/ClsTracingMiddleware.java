@@ -416,9 +416,11 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             span.setAttribute("gen_ai.react.round", (long) step.round());
         }
         try {
-            List<Map<String, Object>> inputMessages = messageConverter.convert(input.messages());
+            AgentScopeMessageConverter.ConversionResult converted =
+                    messageConverter.convertBounded(input.messages());
             MessageCapturePolicy.CapturedMessages captured =
-                    messageCapturePolicy.capture(inputMessages, true);
+                    messageCapturePolicy.capture(
+                            converted.messages(), true, converted.complete());
             captured.observableHash()
                     .ifPresent(hash -> span.setAttribute("gen_ai.input.messages.hash", hash));
             captured.value()
@@ -652,10 +654,11 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         .startSpan();
         Span inputEntry = entry;
         try {
-            List<Map<String, Object>> agentInputMessages =
-                    messageConverter.convert(agentMessages);
+            AgentScopeMessageConverter.ConversionResult converted =
+                    messageConverter.convertBounded(agentMessages);
             MessageCapturePolicy.CapturedMessages captured =
-                    messageCapturePolicy.capture(agentInputMessages, false);
+                    messageCapturePolicy.capture(
+                            converted.messages(), false, converted.complete());
             captured.value()
                     .ifPresent(
                             node -> {
@@ -749,10 +752,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         if (!(event instanceof AgentResultEvent result)) {
             return;
         }
-        List<Map<String, Object>> outputMessages =
-                List.of(messageConverter.convert(result.getResult()));
+        AgentScopeMessageConverter.ConversionResult converted =
+                messageConverter.convertBounded(List.of(result.getResult()));
         messageCapturePolicy
-                .capture(outputMessages, false)
+                .capture(converted.messages(), false, converted.complete())
                 .value()
                 .ifPresent(
                         node -> {

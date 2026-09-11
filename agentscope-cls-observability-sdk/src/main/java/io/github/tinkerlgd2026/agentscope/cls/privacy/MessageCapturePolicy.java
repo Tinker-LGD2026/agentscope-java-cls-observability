@@ -39,15 +39,22 @@ public final class MessageCapturePolicy {
 
     public CapturedMessages capture(
             @Nullable List<Map<String, Object>> messages, boolean includeObservableHash) {
+        return capture(messages, includeObservableHash, true);
+    }
+
+    public CapturedMessages capture(
+            @Nullable List<Map<String, Object>> messages,
+            boolean includeObservableHash,
+            boolean sourceComplete) {
         List<Map<String, Object>> source = messages == null ? List.of() : messages;
         try {
-            List<Map<String, Object>> boundedSource = boundedMessages(source);
-            List<Map<String, Object>> hashBasis = hashBasis(boundedSource);
+            BoundedMessages bounded = boundedMessages(source);
+            List<Map<String, Object>> hashBasis = hashBasis(bounded.messages());
             Optional<String> observableHash =
-                    includeObservableHash
+                    includeObservableHash && sourceComplete && bounded.complete()
                             ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
                             : Optional.empty();
-            List<Map<String, Object>> captured = captureMessages(boundedSource);
+            List<Map<String, Object>> captured = captureMessages(bounded.messages());
             Optional<JsonNode> value = captureWithPriority(captured);
             return new CapturedMessages(value, observableHash);
         } catch (RuntimeException | StackOverflowError failure) {
@@ -55,14 +62,19 @@ public final class MessageCapturePolicy {
         }
     }
 
-    private List<Map<String, Object>> boundedMessages(List<Map<String, Object>> messages) {
+    private BoundedMessages boundedMessages(List<Map<String, Object>> messages) {
         SelectionLimits limits = new SelectionLimits();
         List<Map<String, Object>> bounded = new ArrayList<>();
-        for (Map<String, Object> message : messages) {
+        int firstMessage = Math.max(0, messages.size() - SelectionLimits.MAX_MESSAGES);
+        if (firstMessage > 0) {
+            limits.incomplete = true;
+        }
+        for (int index = messages.size() - 1; index >= firstMessage; index--) {
+            Map<String, Object> message = messages.get(index);
             if (message == null) {
                 continue;
             }
-            List<Map<String, Object>> parts = boundedParts(message.get("parts"), limits);
+            List<Map<String, Object>> parts = boundedParts(message.get("parts"), limits, 0);
             if (parts.isEmpty()) {
                 continue;
             }
@@ -72,18 +84,29 @@ public final class MessageCapturePolicy {
                 copy.put("name", message.get("name"));
             }
             copy.put("parts", parts);
-            bounded.add(Map.copyOf(copy));
+            bounded.add(0, Map.copyOf(copy));
+            if (limits.scanExhausted()) {
+                break;
+            }
         }
-        return List.copyOf(bounded);
+        return new BoundedMessages(List.copyOf(bounded), !limits.incomplete);
     }
 
     private List<Map<String, Object>> boundedParts(
-            @Nullable Object value, SelectionLimits limits) {
+            @Nullable Object value, SelectionLimits limits, int depth) {
         if (!(value instanceof List<?> list)) {
             return List.of();
         }
+        if (depth >= SelectionLimits.MAX_NESTING_DEPTH) {
+            limits.incomplete = true;
+            return List.of();
+        }
         List<Map<String, Object>> bounded = new ArrayList<>();
-        for (Object item : list) {
+        for (int index = list.size() - 1; index >= 0; index--) {
+            if (!limits.tryScan()) {
+                break;
+            }
+            Object item = list.get(index);
             if (!(item instanceof Map<?, ?> raw)) {
                 continue;
             }
@@ -91,14 +114,15 @@ public final class MessageCapturePolicy {
             Map<String, Object> part = (Map<String, Object>) raw;
             String type = String.valueOf(part.getOrDefault("type", "unknown"));
             if (!limits.tryAcquire(type)) {
+                limits.incomplete = true;
                 continue;
             }
             if ("tool_call_response".equals(type)) {
                 Map<String, Object> nested = new LinkedHashMap<>(part);
-                nested.put("result", boundedParts(part.get("result"), limits));
-                bounded.add(Map.copyOf(nested));
+                nested.put("result", boundedParts(part.get("result"), limits, depth + 1));
+                bounded.add(0, Map.copyOf(nested));
             } else {
-                bounded.add(part);
+                bounded.add(0, part);
             }
         }
         return List.copyOf(bounded);
@@ -109,21 +133,22 @@ public final class MessageCapturePolicy {
             return Optional.empty();
         }
         boolean textExpected = containsText(captured);
+        boolean toolExpected = containsTool(captured);
         Optional<JsonNode> value = finalBudgetSanitizer.captureMessages(captured);
-        if (!textExpected || containsText(value)) {
+        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
             return value;
         }
 
         List<Map<String, Object>> withoutReasoning = transformMessages(captured, true, false, false);
         value = finalBudgetSanitizer.captureMessages(withoutReasoning);
-        if (containsText(value)) {
+        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
             return value;
         }
 
         List<Map<String, Object>> withoutToolPayloads =
                 transformMessages(withoutReasoning, false, true, false);
         value = finalBudgetSanitizer.captureMessages(withoutToolPayloads);
-        if (containsText(value)) {
+        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
             return value;
         }
 
@@ -199,6 +224,33 @@ public final class MessageCapturePolicy {
     }
 
     private static boolean containsText(Optional<JsonNode> messages) {
+        return containsType(messages, "text", "text_hash");
+    }
+
+    private static boolean containsTool(List<Map<String, Object>> messages) {
+        for (Map<String, Object> message : messages) {
+            for (Map<String, Object> part : asParts(message.get("parts"))) {
+                String type = String.valueOf(part.get("type"));
+                if ("tool_call".equals(type) || "tool_call_response".equals(type)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsTool(Optional<JsonNode> messages) {
+        return containsType(messages, "tool_call", "tool_call_response");
+    }
+
+    private static boolean retainsExpectedPriority(
+            Optional<JsonNode> messages, boolean textExpected, boolean toolExpected) {
+        return (!textExpected || containsText(messages))
+                && (!toolExpected || containsTool(messages));
+    }
+
+    private static boolean containsType(
+            Optional<JsonNode> messages, String firstType, String secondType) {
         if (messages.isEmpty() || !messages.orElseThrow().isArray()) {
             return false;
         }
@@ -209,7 +261,7 @@ public final class MessageCapturePolicy {
             }
             for (JsonNode part : parts) {
                 String type = part.path("type").asText();
-                if ("text".equals(type) || "text_hash".equals(type)) {
+                if (firstType.equals(type) || secondType.equals(type)) {
                     return true;
                 }
             }
@@ -414,10 +466,31 @@ public final class MessageCapturePolicy {
         return Map.copyOf(new LinkedHashMap<>(source));
     }
 
+    private record BoundedMessages(List<Map<String, Object>> messages, boolean complete) {}
+
     private static final class SelectionLimits {
+        private static final int MAX_MESSAGES = 32;
+        private static final int MAX_SCANNED_PARTS = 256;
+        private static final int MAX_NESTING_DEPTH = 16;
+
+        private int scannedParts;
         private int reasoningParts;
         private int contentParts;
         private int toolParts;
+        private boolean incomplete;
+
+        private boolean tryScan() {
+            if (scannedParts >= MAX_SCANNED_PARTS) {
+                incomplete = true;
+                return false;
+            }
+            scannedParts++;
+            return true;
+        }
+
+        private boolean scanExhausted() {
+            return scannedParts >= MAX_SCANNED_PARTS;
+        }
 
         private boolean tryAcquire(String type) {
             if ("reasoning".equals(type) || "reasoning_hash".equals(type)) {

@@ -38,6 +38,7 @@ public final class ClsObservabilityConfig {
     private final String serviceName;
     private final String deploymentEnvironment;
     private final ContentCaptureMode contentCaptureMode;
+    private final ContentCaptureMode reasoningCaptureMode;
     private final int maxContentBytes;
     private final boolean reactorContextHookEnabled;
     private final Duration exportScheduleDelay;
@@ -54,6 +55,7 @@ public final class ClsObservabilityConfig {
         serviceName = builder.serviceName;
         deploymentEnvironment = builder.deploymentEnvironment;
         contentCaptureMode = builder.contentCaptureMode;
+        reasoningCaptureMode = builder.reasoningCaptureMode;
         maxContentBytes = builder.maxContentBytes;
         reactorContextHookEnabled = builder.reactorContextHookEnabled;
         exportScheduleDelay = builder.exportScheduleDelay;
@@ -96,6 +98,10 @@ public final class ClsObservabilityConfig {
                                 clean(environment.get("CLS_DEPLOYMENT_ENVIRONMENT")))
                         .contentCaptureMode(
                                 ContentCaptureMode.parse(environment.get("CLS_CONTENT_CAPTURE")))
+                        .reasoningCaptureMode(
+                                ContentCaptureMode.parse(
+                                        environment.get("CLS_REASONING_CAPTURE"),
+                                        "CLS_REASONING_CAPTURE"))
                         .maxContentBytes(
                                 parseContentBudget(environment.get("CLS_MAX_CONTENT_BYTES")))
                         .reactorContextHookEnabled(
@@ -194,6 +200,10 @@ public final class ClsObservabilityConfig {
         return contentCaptureMode;
     }
 
+    public ContentCaptureMode reasoningCaptureMode() {
+        return reasoningCaptureMode;
+    }
+
     public int maxContentBytes() {
         return maxContentBytes;
     }
@@ -217,6 +227,8 @@ public final class ClsObservabilityConfig {
                 + '\''
                 + ", contentCaptureMode="
                 + contentCaptureMode
+                + ", reasoningCaptureMode="
+                + reasoningCaptureMode
                 + ", maxContentBytes="
                 + maxContentBytes
                 + ", reactorContextHookEnabled="
@@ -331,6 +343,7 @@ public final class ClsObservabilityConfig {
         private String serviceName = "agentscope-java-app";
         private String deploymentEnvironment;
         private ContentCaptureMode contentCaptureMode = ContentCaptureMode.OFF;
+        private ContentCaptureMode reasoningCaptureMode = ContentCaptureMode.OFF;
         private int maxContentBytes = DEFAULT_MAX_CONTENT_BYTES;
         private boolean reactorContextHookEnabled;
         private Duration exportScheduleDelay = Duration.ofMillis(DEFAULT_EXPORT_SCHEDULE_DELAY_MS);
@@ -383,6 +396,11 @@ public final class ClsObservabilityConfig {
             return this;
         }
 
+        public Builder reasoningCaptureMode(ContentCaptureMode value) {
+            reasoningCaptureMode = value;
+            return this;
+        }
+
         public Builder maxContentBytes(int value) {
             maxContentBytes = value;
             return this;
@@ -412,6 +430,9 @@ public final class ClsObservabilityConfig {
             }
             if (contentCaptureMode == null) {
                 throw new IllegalArgumentException("content capture mode is required");
+            }
+            if (reasoningCaptureMode == null) {
+                throw new IllegalArgumentException("reasoning capture mode is required");
             }
             if (maxContentBytes < 256 || maxContentBytes > MAX_CONTENT_BYTES) {
                 throw new IllegalArgumentException(

@@ -24,6 +24,35 @@ class ClsObservabilityConfigTest {
     }
 
     @Test
+    void defaultsReasoningCaptureToOffIndependentlyOfContentCapture() {
+        ClsObservabilityConfig config =
+                ClsObservabilityConfig.fromEnvironment(
+                        Map.of("CLS_CONTENT_CAPTURE", "truncate"));
+
+        assertThat(config.contentCaptureMode()).isEqualTo(ContentCaptureMode.TRUNCATE);
+        assertThat(config.reasoningCaptureMode()).isEqualTo(ContentCaptureMode.OFF);
+    }
+
+    @Test
+    void parsesExplicitReasoningCaptureMode() {
+        ClsObservabilityConfig config =
+                ClsObservabilityConfig.fromEnvironment(
+                        Map.of("CLS_REASONING_CAPTURE", "hash"));
+
+        assertThat(config.reasoningCaptureMode()).isEqualTo(ContentCaptureMode.HASH);
+    }
+
+    @Test
+    void rejectsInvalidReasoningCaptureMode() {
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.fromEnvironment(
+                                        Map.of("CLS_REASONING_CAPTURE", "raw")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CLS_REASONING_CAPTURE must be one of");
+    }
+
+    @Test
     void enablesCloudOnlyWhenAllRequiredValuesExist() {
         Map<String, String> env = cloudEnvironment();
 
@@ -79,7 +108,8 @@ class ClsObservabilityConfigTest {
         ClsObservabilityConfig config = ClsObservabilityConfig.fromEnvironment(cloudEnvironment());
 
         assertThat(config.toString()).doesNotContain("id", "key");
-        assertThat(config.toString()).contains("credentialsConfigured=true");
+        assertThat(config.toString())
+                .contains("credentialsConfigured=true", "reasoningCaptureMode=OFF");
     }
 
     @Test

@@ -362,7 +362,7 @@ final class OutputMessageAccumulator {
         private StreamPart(String type, ContentCaptureMode mode, long startedNanos) {
             this.type = type;
             this.mode = mode;
-            this.payload = new PayloadBuffer(mode);
+            this.payload = new PayloadBuffer(mode, maxBytes);
             this.startedNanos = startedNanos;
         }
 
@@ -428,7 +428,7 @@ final class OutputMessageAccumulator {
     private final class ToolPart implements OutputPart {
         private final String id;
         private final String name;
-        private final PayloadBuffer arguments = new PayloadBuffer(contentMode);
+        private final PayloadBuffer arguments = new PayloadBuffer(contentMode, maxBytes);
         private boolean closed;
 
         private ToolPart(String id, String name) {
@@ -473,8 +473,9 @@ final class OutputMessageAccumulator {
         }
     }
 
-    private final class PayloadBuffer {
+    static final class PayloadBuffer {
         private final ContentCaptureMode mode;
+        private final int maxBytes;
         private final MessageDigest digest;
         private final ByteArrayOutputStream buffered;
         private long originalBytes;
@@ -482,8 +483,9 @@ final class OutputMessageAccumulator {
         private char pendingHighSurrogate;
         private String digestHex;
 
-        private PayloadBuffer(ContentCaptureMode mode) {
-            this.mode = mode;
+        PayloadBuffer(ContentCaptureMode mode, int maxBytes) {
+            this.mode = Objects.requireNonNull(mode, "mode");
+            this.maxBytes = maxBytes;
             this.digest = mode == ContentCaptureMode.OFF ? null : digest();
             this.buffered =
                     mode == ContentCaptureMode.TRUNCATE || mode == ContentCaptureMode.FULL
@@ -491,7 +493,7 @@ final class OutputMessageAccumulator {
                             : null;
         }
 
-        private void append(String delta) {
+        void append(String delta) {
             if (delta == null || delta.isEmpty()) {
                 return;
             }
@@ -505,7 +507,7 @@ final class OutputMessageAccumulator {
             appendComplete(value);
         }
 
-        private void finish() {
+        void finish() {
             if (pendingHighSurrogate != 0) {
                 appendComplete(String.valueOf(pendingHighSurrogate));
                 pendingHighSurrogate = 0;
@@ -540,8 +542,16 @@ final class OutputMessageAccumulator {
             }
         }
 
-        private String text() {
+        String text() {
             return buffered == null ? "" : buffered.toString(StandardCharsets.UTF_8);
+        }
+
+        long originalBytes() {
+            return originalBytes;
+        }
+
+        boolean truncated() {
+            return truncated;
         }
 
         private String digestHex() {

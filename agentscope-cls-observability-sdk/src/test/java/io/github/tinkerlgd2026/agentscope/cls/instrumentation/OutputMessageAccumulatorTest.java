@@ -252,20 +252,35 @@ class OutputMessageAccumulatorTest {
     }
 
     @Test
-    void handlesExactUtf8BudgetBoundariesWithoutSplittingCodePoints() throws Exception {
-        for (String text : new String[] {
-            "a".repeat(252) + "中",
-            "a".repeat(253) + "中",
-            "a".repeat(254) + "中"
-        }) {
-            OutputMessageAccumulator accumulator = accumulator(FULL, OFF, 256);
-            accumulator.accept(
-                    new TextBlockDeltaEvent("reply", "text-" + text.length(), text),
-                    1_000_000L);
-            JsonNode messages = accumulator.finish(2_000_000L).messages().orElseThrow();
-            assertThat(JSON.writeValueAsBytes(messages).length).isLessThanOrEqualTo(256);
-            assertThat(messages.toString()).doesNotContain("�");
-        }
+    void handlesExactUtf8BudgetBoundariesWithoutSplittingCodePoints() {
+        String at255 = "a".repeat(252) + "中";
+        String at256 = "a".repeat(253) + "中";
+        String at257 = "a".repeat(254) + "中";
+
+        OutputMessageAccumulator.PayloadBuffer first =
+                new OutputMessageAccumulator.PayloadBuffer(FULL, 256);
+        first.append(at255);
+        first.finish();
+        assertThat(first.originalBytes()).isEqualTo(255);
+        assertThat(first.text()).isEqualTo(at255);
+        assertThat(first.truncated()).isFalse();
+
+        OutputMessageAccumulator.PayloadBuffer second =
+                new OutputMessageAccumulator.PayloadBuffer(FULL, 256);
+        second.append(at256);
+        second.finish();
+        assertThat(second.originalBytes()).isEqualTo(256);
+        assertThat(second.text()).isEqualTo(at256);
+        assertThat(second.truncated()).isFalse();
+
+        OutputMessageAccumulator.PayloadBuffer third =
+                new OutputMessageAccumulator.PayloadBuffer(FULL, 256);
+        third.append(at257);
+        third.finish();
+        assertThat(third.originalBytes()).isEqualTo(257);
+        assertThat(third.text()).isEqualTo("a".repeat(254));
+        assertThat(third.truncated()).isTrue();
+        assertThat(third.text()).doesNotContain("�");
     }
 
     @Test

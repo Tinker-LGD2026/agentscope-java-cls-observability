@@ -125,10 +125,17 @@ class ClsSpanEncoderTest {
         JsonNode attributes = JSON.readTree(record.attribute());
 
         assertThat(attributes.get(ClsFields.REASONING_PRESENT).isBoolean()).isTrue();
-        assertThat(attributes.get(ClsFields.REASONING_BLOCK_COUNT).isIntegralNumber()).isTrue();
+        assertThat(attributes.get(ClsFields.REASONING_PRESENT).asBoolean()).isTrue();
+        assertThat(attributes.get(ClsFields.REASONING_BLOCK_COUNT).asLong()).isEqualTo(2L);
+        assertThat(attributes.get(ClsFields.REASONING_OUTPUT_BYTES).asLong()).isEqualTo(1024L);
+        assertThat(attributes.get(ClsFields.REASONING_DURATION_MS).asLong()).isEqualTo(50L);
+        assertThat(attributes.get(ClsFields.REASONING_TTFT_MS).asLong()).isEqualTo(10L);
         assertThat(attributes.get(ClsFields.REASONING_CAPTURE_MODE).asText())
                 .isEqualTo("truncate");
         assertThat(attributes.get(ClsFields.REASONING_TRUNCATED).isBoolean()).isTrue();
+        assertThat(attributes.get(ClsFields.REASONING_TRUNCATED).asBoolean()).isFalse();
+        assertThat(attributes.get(ClsFields.REASONING_MALFORMED_EVENTS).asLong()).isZero();
+        assertThat(attributes.get(ClsFields.RESPONSE_TTFT_MS).asLong()).isEqualTo(80L);
         assertThat(new ClsSpanValidator(JSON).validate(record)).isEmpty();
     }
 
@@ -154,6 +161,60 @@ class ClsSpanEncoderTest {
                         "attribute.agentscope.reasoning.capture_mode is unsupported",
                         "attribute.gen_ai.output.messages reasoning_hash.sha256 is invalid",
                         "attribute.gen_ai.output.messages reasoning_hash.original_bytes must be non-negative");
+    }
+
+    @Test
+    void validatorRejectsNestedInvalidReasoningAndUnsafeSummaryObjects() {
+        String attributes =
+                "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
+                        + "\"gen_ai.agent.type\":\"agentscope-java\","
+                        + "\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\","
+                        + "\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\","
+                        + "\"gen_ai.input.messages\":[{\"role\":\"assistant\",\"parts\":["
+                        + "{\"type\":\"tool_call_response\",\"result\":["
+                        + "{\"type\":\"reasoning_hash\",\"sha256\":\"bad\","
+                        + "\"original_bytes\":-1}]}]}],"
+                        + "\"gen_ai.output.messages\":[{\"role\":\"assistant\",\"parts\":["
+                        + "{\"type\":\"reasoning\",\"content\":{\"secret\":\"plaintext\"}}]}]}";
+
+        assertThat(new ClsSpanValidator(JSON).validate(validRecord(attributes)))
+                .contains(
+                        "attribute.gen_ai.input.messages reasoning_hash.sha256 is invalid",
+                        "attribute.gen_ai.input.messages reasoning_hash.original_bytes must be non-negative",
+                        "attribute.gen_ai.output.messages reasoning.content summary is invalid");
+    }
+
+    @Test
+    void validatorAcceptsSafeReasoningSummaryAndUnknownFuturePart() {
+        String attributes =
+                "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
+                        + "\"gen_ai.agent.type\":\"agentscope-java\","
+                        + "\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\","
+                        + "\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\","
+                        + "\"gen_ai.output.messages\":[{\"role\":\"assistant\",\"parts\":["
+                        + "{\"type\":\"reasoning\",\"content\":{\"truncated\":true,"
+                        + "\"original_bytes\":400,\"preview\":\"safe\"}},"
+                        + "{\"type\":\"future_part\",\"payload\":{\"x\":1}}]}]}";
+
+        assertThat(new ClsSpanValidator(JSON).validate(validRecord(attributes))).isEmpty();
+    }
+
+    @Test
+    void validatorRejectsIntegersOutsideSignedLongRange() {
+        String attributes =
+                "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
+                        + "\"gen_ai.agent.type\":\"agentscope-java\","
+                        + "\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\","
+                        + "\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\","
+                        + "\"agentscope.reasoning.output_bytes\":-18446744073709551616,"
+                        + "\"gen_ai.output.messages\":[{\"role\":\"assistant\",\"parts\":["
+                        + "{\"type\":\"reasoning_hash\",\"sha256\":\"" + "a".repeat(64)
+                        + "\",\"original_bytes\":18446744073709551616}]}]}";
+
+        assertThat(new ClsSpanValidator(JSON).validate(validRecord(attributes)))
+                .contains(
+                        "attribute.agentscope.reasoning.output_bytes must fit a signed 64-bit integer",
+                        "attribute.gen_ai.output.messages reasoning_hash.original_bytes must fit a signed 64-bit integer");
     }
 
     @Test

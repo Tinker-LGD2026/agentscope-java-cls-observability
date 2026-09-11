@@ -148,10 +148,8 @@ public final class ClsSpanValidator {
         }
         for (String key : INTEGER_ATTRIBUTES) {
             JsonNode value = attributes.get(key);
-            if (value != null && !value.isIntegralNumber()) {
-                errors.add("attribute." + key + " must be an integer");
-            } else if (value != null && value.asLong() < 0) {
-                errors.add("attribute." + key + " must be non-negative");
+            if (value != null) {
+                validateNonNegativeLong(errors, value, "attribute." + key);
             }
         }
         for (String key : BOOLEAN_ATTRIBUTES) {
@@ -190,38 +188,79 @@ public final class ClsSpanValidator {
             List<String> errors, JsonNode messages, String attributeKey) {
         String prefix = "attribute." + attributeKey;
         for (JsonNode message : messages) {
-            if (!message.isObject()) {
+            if (message.isObject()) {
+                validatePartArray(errors, message.get("parts"), prefix);
+            }
+        }
+    }
+
+    private static void validatePartArray(
+            List<String> errors, JsonNode parts, String prefix) {
+        if (parts == null || !parts.isArray()) {
+            return;
+        }
+        for (JsonNode part : parts) {
+            if (!part.isObject()) {
                 continue;
             }
-            JsonNode parts = message.get("parts");
-            if (parts == null || !parts.isArray()) {
-                continue;
+            String type = part.path("type").asText();
+            if ("reasoning".equals(type)) {
+                validateReasoningContent(errors, part.get("content"), prefix);
+            } else if ("reasoning_hash".equals(type)) {
+                validateReasoningHash(errors, part, prefix);
+            } else if ("tool_call_response".equals(type)) {
+                validatePartArray(errors, part.get("result"), prefix);
             }
-            for (JsonNode part : parts) {
-                if (!part.isObject()) {
-                    continue;
-                }
-                String type = part.path("type").asText();
-                if ("reasoning".equals(type)) {
-                    JsonNode content = part.get("content");
-                    if (content == null || (!content.isTextual() && !content.isObject())) {
-                        errors.add(prefix + " reasoning.content must be a string or object");
-                    }
-                } else if ("reasoning_hash".equals(type)) {
-                    JsonNode sha256 = part.get("sha256");
-                    if (sha256 == null
-                            || !sha256.isTextual()
-                            || !SHA_256.matcher(sha256.asText()).matches()) {
-                        errors.add(prefix + " reasoning_hash.sha256 is invalid");
-                    }
-                    JsonNode originalBytes = part.get("original_bytes");
-                    if (originalBytes == null || !originalBytes.isIntegralNumber()) {
-                        errors.add(prefix + " reasoning_hash.original_bytes must be an integer");
-                    } else if (originalBytes.asLong() < 0) {
-                        errors.add(prefix + " reasoning_hash.original_bytes must be non-negative");
-                    }
-                }
-            }
+        }
+    }
+
+    private static void validateReasoningContent(
+            List<String> errors, JsonNode content, String prefix) {
+        if (content == null || (!content.isTextual() && !isSafeSummary(content))) {
+            errors.add(prefix + " reasoning.content summary is invalid");
+        }
+    }
+
+    private static boolean isSafeSummary(JsonNode content) {
+        if (!content.isObject()
+                || content.size() != 3
+                || !content.path("truncated").isBoolean()
+                || !content.path("truncated").asBoolean()
+                || !content.path("preview").isTextual()) {
+            return false;
+        }
+        JsonNode originalBytes = content.get("original_bytes");
+        return originalBytes != null
+                && originalBytes.isIntegralNumber()
+                && originalBytes.canConvertToLong()
+                && originalBytes.longValue() >= 0;
+    }
+
+    private static void validateReasoningHash(
+            List<String> errors, JsonNode part, String prefix) {
+        JsonNode sha256 = part.get("sha256");
+        if (sha256 == null
+                || !sha256.isTextual()
+                || !SHA_256.matcher(sha256.asText()).matches()) {
+            errors.add(prefix + " reasoning_hash.sha256 is invalid");
+        }
+        JsonNode originalBytes = part.get("original_bytes");
+        if (originalBytes == null) {
+            errors.add(prefix + " reasoning_hash.original_bytes must be an integer");
+        } else {
+            validateNonNegativeLong(
+                    errors, originalBytes, prefix + " reasoning_hash.original_bytes");
+        }
+    }
+
+    private static void validateNonNegativeLong(
+            List<String> errors, JsonNode value, String field) {
+        if (!value.isIntegralNumber()) {
+            errors.add(field + " must be an integer");
+        } else if (!value.canConvertToLong()) {
+            errors.add(field + " must fit a signed 64-bit integer");
+        } else if (value.longValue() < 0) {
+            errors.add(field + " must be non-negative");
         }
     }
 

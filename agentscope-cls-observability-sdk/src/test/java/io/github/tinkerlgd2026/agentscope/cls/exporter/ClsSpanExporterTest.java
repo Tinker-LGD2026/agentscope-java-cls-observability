@@ -55,7 +55,11 @@ class ClsSpanExporterTest {
         result.join(1, TimeUnit.SECONDS);
 
         assertThat(result.isSuccess()).isFalse();
-        assertThat(sink.records()).hasSize(1);
+        assertThat(sink.records()).singleElement().satisfies(
+                record -> {
+                    assertThat(record.name()).isEqualTo("chat valid-reasoning");
+                    assertThat(record.attribute()).contains("a".repeat(64)).doesNotContain("bad");
+                });
         assertThat(counters.snapshot().acceptedSpans()).isEqualTo(1);
         assertThat(counters.snapshot().invalidSpans()).isEqualTo(1);
     }
@@ -90,7 +94,8 @@ class ClsSpanExporterTest {
                         .build()) {
             String hash = validHash ? "a".repeat(64) : "bad";
             Span span =
-                    provider.get("test").spanBuilder("chat model")
+                    provider.get("test")
+                            .spanBuilder(validHash ? "chat valid-reasoning" : "chat invalid-reasoning")
                             .setAttribute("gen_ai.span.kind", "chat")
                             .setAttribute("gen_ai.operation.name", "chat")
                             .setAttribute("gen_ai.agent.type", "agentscope-java")

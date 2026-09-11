@@ -36,28 +36,35 @@ public final class MessageCapturePolicy {
     public CapturedMessages capture(
             @Nullable List<Map<String, Object>> messages, boolean includeObservableHash) {
         List<Map<String, Object>> source = messages == null ? List.of() : messages;
-        List<Map<String, Object>> hashBasis = hashBasis(source);
-        Optional<String> observableHash =
-                includeObservableHash
-                        ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
-                        : Optional.empty();
-        List<Map<String, Object>> captured = captureMessages(source);
-        Optional<JsonNode> value =
-                captured.isEmpty()
-                        ? Optional.empty()
-                        : finalBudgetSanitizer.captureMessages(captured);
-        return new CapturedMessages(value, observableHash);
+        try {
+            List<Map<String, Object>> hashBasis = hashBasis(source);
+            Optional<String> observableHash =
+                    includeObservableHash
+                            ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
+                            : Optional.empty();
+            List<Map<String, Object>> captured = captureMessages(source);
+            Optional<JsonNode> value =
+                    captured.isEmpty()
+                            ? Optional.empty()
+                            : finalBudgetSanitizer.captureMessages(captured);
+            return new CapturedMessages(value, observableHash);
+        } catch (RuntimeException | StackOverflowError failure) {
+            return new CapturedMessages(Optional.empty(), Optional.empty());
+        }
     }
 
     private List<Map<String, Object>> captureMessages(List<Map<String, Object>> messages) {
         List<Map<String, Object>> captured = new ArrayList<>();
         for (Map<String, Object> message : messages) {
+            if (message == null) {
+                continue;
+            }
             List<Map<String, Object>> parts = captureParts(asParts(message.get("parts")));
             if (parts.isEmpty()) {
                 continue;
             }
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("role", message.getOrDefault("role", "unknown"));
+            result.put("role", nonNullValue(message.get("role"), "unknown"));
             if (message.get("name") != null) {
                 result.put("name", message.get("name"));
             }
@@ -87,8 +94,10 @@ public final class MessageCapturePolicy {
             case "text" ->
                     captureContentPart(part.get("content"), contentMode, contentSanitizer,
                             "text", "text_hash");
-            case "reasoning_hash" -> reasoningMode == ContentCaptureMode.OFF ? null : copy(part);
-            case "text_hash" -> contentMode == ContentCaptureMode.OFF ? null : copy(part);
+            case "reasoning_hash" ->
+                    reasoningMode == ContentCaptureMode.OFF ? null : copyHashPart(part, "reasoning_hash");
+            case "text_hash" ->
+                    contentMode == ContentCaptureMode.OFF ? null : copyHashPart(part, "text_hash");
             case "tool_call" -> captureToolCall(part);
             case "tool_call_response" -> captureToolResponse(part);
             default -> captureUnknown(part);
@@ -126,7 +135,7 @@ public final class MessageCapturePolicy {
     }
 
     private Map<String, Object> captureToolResponse(Map<String, Object> part) {
-        Map<String, Object> result = toolIdentity(part, false);
+        Map<String, Object> result = toolIdentity(part, true);
         List<Map<String, Object>> nested = captureParts(asParts(part.get("result")));
         if (!nested.isEmpty()) {
             result.put("result", nested);
@@ -164,12 +173,15 @@ public final class MessageCapturePolicy {
     private List<Map<String, Object>> hashBasis(List<Map<String, Object>> messages) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> message : messages) {
+            if (message == null) {
+                continue;
+            }
             List<Map<String, Object>> parts = hashBasisParts(asParts(message.get("parts")));
             if (parts.isEmpty()) {
                 continue;
             }
             Map<String, Object> copy = new LinkedHashMap<>();
-            copy.put("role", message.getOrDefault("role", "unknown"));
+            copy.put("role", nonNullValue(message.get("role"), "unknown"));
             if (message.get("name") != null) {
                 copy.put("name", message.get("name"));
             }
@@ -196,6 +208,23 @@ public final class MessageCapturePolicy {
             }
         }
         return List.copyOf(result);
+    }
+
+    private static Map<String, Object> copyHashPart(
+            Map<String, Object> source, String expectedType) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type", expectedType);
+        result.put("sha256", nonNullValue(source.get("sha256"), ""));
+        Object originalBytes = source.get("original_bytes");
+        result.put("original_bytes", originalBytes instanceof Number ? originalBytes : 0L);
+        if (Boolean.TRUE.equals(source.get("truncated"))) {
+            result.put("truncated", true);
+        }
+        return Map.copyOf(result);
+    }
+
+    private static Object nonNullValue(@Nullable Object value, Object fallback) {
+        return value == null ? fallback : value;
     }
 
     @SuppressWarnings("unchecked")

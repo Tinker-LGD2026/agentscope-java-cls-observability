@@ -6,7 +6,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 - Added provider-neutral AgentScope `ThinkingBlock` event capture for ordered Chat Span reasoning, text, and tool-call parts.
 - Added independent `CLS_REASONING_CAPTURE` privacy control, defaulting to `off` without reasoning plaintext or stable Hash.
-- Added bounded Reasoning metrics for presence, block count, bytes, duration, reasoning/response time to first token, truncation, and malformed events.
+- Added bounded Reasoning metrics for presence, block count, bytes, duration, reasoning/response time to first token, and truncation; the compatibility-named malformed-event field covers Thinking, Text, and Tool Call output block lifecycles.
 - Removed misleading zero-valued reasoning token attributes when upstream usage is unavailable.
 - Added explicit Thinking controls to the travel Demo and Provider-neutral end-to-end integration coverage.
 

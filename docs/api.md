@@ -75,4 +75,6 @@ Hash 模式使用：
 {"type":"reasoning_hash","sha256":"<64位小写十六进制>","original_bytes":18240}
 ```
 
-Chat Span 还可能包含 `agentscope.reasoning.present`、块数、原始字节数、推理持续时间、推理首片段时间、回答首片段时间、截断和畸形事件计数。AgentScope 2.0.3 未统一暴露 Reasoning Token，因此未知时不写 `gen_ai.usage.reasoning_output_tokens`，不会用固定 `0` 或本地估算冒充真实值。
+上述同时包含 `reasoning` 和 `text` 的示例假设 `CLS_REASONING_CAPTURE` 与 `CLS_CONTENT_CAPTURE` 均已开启；两类正文仍分别受各自策略控制。
+
+Chat Span 还可能包含 `agentscope.reasoning.present`、块数、原始字节数、推理持续时间、推理首片段时间、回答首片段时间和截断状态。`agentscope.reasoning.malformed_event_count` 统计本次模型输出中 Thinking、Text 与 Tool Call 块生命周期的全部畸形事件；字段保留 `reasoning` 前缀是当前扩展 Schema 的兼容约定，并非只统计 Thinking 块。AgentScope 2.0.3 未统一暴露 Reasoning Token，因此未知时不写 `gen_ai.usage.reasoning_output_tokens`，不会用固定 `0` 或本地估算冒充真实值。

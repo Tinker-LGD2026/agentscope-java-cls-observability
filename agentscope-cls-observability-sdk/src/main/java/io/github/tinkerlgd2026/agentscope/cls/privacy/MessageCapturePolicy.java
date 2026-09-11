@@ -2,6 +2,7 @@ package io.github.tinkerlgd2026.agentscope.cls.privacy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,6 +16,8 @@ public final class MessageCapturePolicy {
     private static final int MAX_REASONING_PARTS = 8;
     private static final int MAX_CONTENT_PARTS = 16;
     private static final int MAX_TOOL_PARTS = 8;
+    private static final int MINIMAL_TEXT_BYTES = 64;
+    private static final int MINIMAL_IDENTITY_BYTES = 32;
 
     private final ObjectMapper objectMapper;
     private final ContentCaptureMode contentMode;
@@ -159,17 +162,114 @@ public final class MessageCapturePolicy {
             return value;
         }
 
+        List<Map<String, Object>> minimalPriority = minimalPriorityMessages(latestPriority);
+        value = finalBudgetSanitizer.captureMessages(minimalPriority);
+        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
+            return value;
+        }
+
         if (textExpected) {
             List<Map<String, Object>> latestText =
-                    latestPriorityMessages(withoutToolPayloads, true, false);
+                    minimalPriorityMessages(
+                            latestPriorityMessages(withoutToolPayloads, true, false));
             value = finalBudgetSanitizer.captureMessages(latestText);
             if (containsText(value)) {
                 return value;
             }
         }
         List<Map<String, Object>> latestTool =
-                latestPriorityMessages(withoutToolPayloads, false, toolExpected);
-        return finalBudgetSanitizer.captureMessages(latestTool);
+                minimalPriorityMessages(
+                        latestPriorityMessages(withoutToolPayloads, false, toolExpected));
+        value = finalBudgetSanitizer.captureMessages(latestTool);
+        return containsTool(value) ? value : Optional.empty();
+    }
+
+    private static List<Map<String, Object>> minimalPriorityMessages(
+            List<Map<String, Object>> messages) {
+        List<Map<String, Object>> minimal = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            List<Map<String, Object>> parts = new ArrayList<>();
+            for (Map<String, Object> part : asParts(message.get("parts"))) {
+                String type = String.valueOf(part.get("type"));
+                if ("text".equals(type)) {
+                    String text = safePreview(part.get("content"));
+                    parts.add(
+                            Map.of(
+                                    "type", "text",
+                                    "content", utf8Prefix(text, MINIMAL_TEXT_BYTES),
+                                    "truncated", true));
+                } else if ("text_hash".equals(type)) {
+                    parts.add(copyHashPart(part, "text_hash"));
+                } else if ("tool_call".equals(type) || "tool_call_response".equals(type)) {
+                    Map<String, Object> identity = new LinkedHashMap<>();
+                    identity.put("type", type);
+                    if (part.get("id") != null) {
+                        identity.put(
+                                "id",
+                                utf8Prefix(
+                                        String.valueOf(part.get("id")),
+                                        MINIMAL_IDENTITY_BYTES));
+                    }
+                    if (part.get("name") != null) {
+                        identity.put(
+                                "name",
+                                utf8Prefix(
+                                        String.valueOf(part.get("name")),
+                                        MINIMAL_IDENTITY_BYTES));
+                    }
+                    parts.add(Map.copyOf(identity));
+                }
+            }
+            if (parts.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            copy.put(
+                    "role",
+                    utf8Prefix(
+                            String.valueOf(nonNullValue(message.get("role"), "unknown")),
+                            MINIMAL_IDENTITY_BYTES));
+            if (message.get("name") != null) {
+                copy.put(
+                        "name",
+                        utf8Prefix(
+                                String.valueOf(message.get("name")),
+                                MINIMAL_IDENTITY_BYTES));
+            }
+            copy.put("parts", List.copyOf(parts));
+            minimal.add(Map.copyOf(copy));
+        }
+        return List.copyOf(minimal);
+    }
+
+    private static String safePreview(@Nullable Object content) {
+        if (content instanceof JsonNode node) {
+            if (node.isTextual()) {
+                return node.asText();
+            }
+            if (node.path("preview").isTextual()) {
+                return node.path("preview").asText();
+            }
+            return "[TRUNCATED]";
+        }
+        return content == null ? "" : String.valueOf(content);
+    }
+
+    private static String utf8Prefix(String value, int maxBytes) {
+        StringBuilder result = new StringBuilder();
+        int bytes = 0;
+        for (int offset = 0; offset < value.length(); ) {
+            int codePoint = value.codePointAt(offset);
+            String character = new String(Character.toChars(codePoint));
+            int characterBytes = character.getBytes(StandardCharsets.UTF_8).length;
+            if (bytes + characterBytes > maxBytes) {
+                break;
+            }
+            result.append(character);
+            bytes += characterBytes;
+            offset += Character.charCount(codePoint);
+        }
+        return result.toString();
     }
 
     private static List<Map<String, Object>> latestPriorityMessages(

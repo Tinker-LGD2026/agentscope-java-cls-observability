@@ -276,6 +276,51 @@ class MessageCapturePolicyTest {
     }
 
     @Test
+    void finalBudgetKeepsATypePreservingTruncatedLatestTextWhenItAloneIsLong() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+
+        JsonNode captured =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "text",
+                                                "content", "final-answer-" + "x".repeat(2_000))),
+                                false)
+                        .value()
+                        .orElseThrow();
+
+        assertThat(captured.at("/0/parts/0/type").asText()).isEqualTo("text");
+        assertThat(captured.toString()).contains("final-answer");
+        assertThat(captured.toString()).doesNotContain("content_summary");
+    }
+
+    @Test
+    void toolOnlyBudgetBoundsAnOversizedLatestIdentityWithoutDroppingIt() {
+        MessageCapturePolicy policy =
+                new MessageCapturePolicy(
+                        JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
+
+        JsonNode captured =
+                policy.capture(
+                                messages(
+                                        Map.of(
+                                                "type", "tool_call",
+                                                "id", "call-final-" + "x".repeat(2_000),
+                                                "name", "search-final-" + "y".repeat(2_000),
+                                                "arguments", Map.of())),
+                                false)
+                        .value()
+                        .orElseThrow();
+
+        assertThat(captured.at("/0/parts/0/type").asText()).isEqualTo("tool_call");
+        assertThat(captured.at("/0/parts/0/id").asText()).startsWith("call-final");
+        assertThat(captured.at("/0/parts/0/name").asText()).startsWith("search-final");
+        assertThat(captured.toString()).doesNotContain("content_summary");
+    }
+
+    @Test
     void finalBudgetDropsOlderTextUntilLatestAnswerFits() {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(

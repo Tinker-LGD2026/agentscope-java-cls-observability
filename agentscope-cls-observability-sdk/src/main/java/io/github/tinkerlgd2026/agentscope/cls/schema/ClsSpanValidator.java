@@ -11,6 +11,7 @@ import java.util.regex.Pattern;
 public final class ClsSpanValidator {
     private static final Pattern TRACE_ID = Pattern.compile("[0-9a-f]{32}");
     private static final Pattern SPAN_ID = Pattern.compile("[0-9a-f]{16}");
+    private static final Pattern SHA_256 = Pattern.compile("[0-9a-f]{64}");
     private static final Map<String, String> OPERATIONS =
             Map.of(
                     "entry", "enter_application",
@@ -39,7 +40,17 @@ public final class ClsSpanValidator {
                     "gen_ai.usage.reasoning_output_tokens",
                     "gen_ai.agent.message_count",
                     "gen_ai.agent.tool_call_count",
-                    "gen_ai.react.round");
+                    "gen_ai.react.round",
+                    ClsFields.REASONING_BLOCK_COUNT,
+                    ClsFields.REASONING_OUTPUT_BYTES,
+                    ClsFields.REASONING_DURATION_MS,
+                    ClsFields.REASONING_TTFT_MS,
+                    ClsFields.REASONING_MALFORMED_EVENTS,
+                    ClsFields.RESPONSE_TTFT_MS);
+    private static final List<String> BOOLEAN_ATTRIBUTES =
+            List.of(ClsFields.REASONING_PRESENT, ClsFields.REASONING_TRUNCATED);
+    private static final Set<String> CAPTURE_MODES =
+            Set.of("off", "hash", "truncate", "full");
     private static final List<String> COMMON_ATTRIBUTES =
             List.of(
                     ClsFields.SPAN_KIND,
@@ -131,13 +142,28 @@ public final class ClsSpanValidator {
             JsonNode value = attributes.get(key);
             if (value != null && !value.isArray()) {
                 errors.add("attribute." + key + " must be a JSON array");
+            } else if (value != null) {
+                validateReasoningParts(errors, value, key);
             }
         }
         for (String key : INTEGER_ATTRIBUTES) {
             JsonNode value = attributes.get(key);
             if (value != null && !value.isIntegralNumber()) {
                 errors.add("attribute." + key + " must be an integer");
+            } else if (value != null && value.asLong() < 0) {
+                errors.add("attribute." + key + " must be non-negative");
             }
+        }
+        for (String key : BOOLEAN_ATTRIBUTES) {
+            JsonNode value = attributes.get(key);
+            if (value != null && !value.isBoolean()) {
+                errors.add("attribute." + key + " must be a boolean");
+            }
+        }
+        JsonNode captureMode = attributes.get(ClsFields.REASONING_CAPTURE_MODE);
+        if (captureMode != null
+                && (!captureMode.isTextual() || !CAPTURE_MODES.contains(captureMode.asText()))) {
+            errors.add("attribute." + ClsFields.REASONING_CAPTURE_MODE + " is unsupported");
         }
         JsonNode finishReasons = attributes.get("gen_ai.response.finish_reasons");
         if (finishReasons != null
@@ -157,6 +183,45 @@ public final class ClsSpanValidator {
             requireJsonText(errors, attributes, "attribute", "gen_ai.tool.type");
             requireJsonInteger(
                     errors, attributes, "attribute", "gen_ai.tool.call.duration_ms");
+        }
+    }
+
+    private static void validateReasoningParts(
+            List<String> errors, JsonNode messages, String attributeKey) {
+        String prefix = "attribute." + attributeKey;
+        for (JsonNode message : messages) {
+            if (!message.isObject()) {
+                continue;
+            }
+            JsonNode parts = message.get("parts");
+            if (parts == null || !parts.isArray()) {
+                continue;
+            }
+            for (JsonNode part : parts) {
+                if (!part.isObject()) {
+                    continue;
+                }
+                String type = part.path("type").asText();
+                if ("reasoning".equals(type)) {
+                    JsonNode content = part.get("content");
+                    if (content == null || (!content.isTextual() && !content.isObject())) {
+                        errors.add(prefix + " reasoning.content must be a string or object");
+                    }
+                } else if ("reasoning_hash".equals(type)) {
+                    JsonNode sha256 = part.get("sha256");
+                    if (sha256 == null
+                            || !sha256.isTextual()
+                            || !SHA_256.matcher(sha256.asText()).matches()) {
+                        errors.add(prefix + " reasoning_hash.sha256 is invalid");
+                    }
+                    JsonNode originalBytes = part.get("original_bytes");
+                    if (originalBytes == null || !originalBytes.isIntegralNumber()) {
+                        errors.add(prefix + " reasoning_hash.original_bytes must be an integer");
+                    } else if (originalBytes.asLong() < 0) {
+                        errors.add(prefix + " reasoning_hash.original_bytes must be non-negative");
+                    }
+                }
+            }
         }
     }
 

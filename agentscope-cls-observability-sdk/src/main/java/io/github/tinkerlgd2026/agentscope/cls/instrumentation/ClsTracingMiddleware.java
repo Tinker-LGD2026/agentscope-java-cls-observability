@@ -925,29 +925,21 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private void writeReasoningMetrics(
             Span span, OutputMessageAccumulator.Result result) {
         OutputMessageAccumulator.ReasoningMetrics reasoning = result.reasoning();
-        span.setAttribute("agentscope.reasoning.present", reasoning.present());
-        span.setAttribute("agentscope.reasoning.block_count", reasoning.blockCount());
-        span.setAttribute("agentscope.reasoning.output_bytes", reasoning.outputBytes());
-        span.setAttribute("agentscope.reasoning.duration_ms", reasoning.durationMs());
+        span.setAttribute(ClsFields.REASONING_PRESENT, reasoning.present());
+        span.setAttribute(ClsFields.REASONING_BLOCK_COUNT, reasoning.blockCount());
+        span.setAttribute(ClsFields.REASONING_OUTPUT_BYTES, reasoning.outputBytes());
+        span.setAttribute(ClsFields.REASONING_DURATION_MS, reasoning.durationMs());
         span.setAttribute(
-                "agentscope.reasoning.capture_mode",
+                ClsFields.REASONING_CAPTURE_MODE,
                 reasoningCaptureMode.name().toLowerCase(Locale.ROOT));
-        span.setAttribute("agentscope.reasoning.truncated", reasoning.truncated());
+        span.setAttribute(ClsFields.REASONING_TRUNCATED, reasoning.truncated());
         span.setAttribute(
-                "agentscope.reasoning.malformed_event_count",
+                ClsFields.REASONING_MALFORMED_EVENTS,
                 reasoning.malformedEventCount());
         reasoning.timeToFirstTokenMs()
-                .ifPresent(
-                        value ->
-                                span.setAttribute(
-                                        "agentscope.reasoning.time_to_first_token_ms",
-                                        value));
+                .ifPresent(value -> span.setAttribute(ClsFields.REASONING_TTFT_MS, value));
         result.responseTimeToFirstTokenMs()
-                .ifPresent(
-                        value ->
-                                span.setAttribute(
-                                        "agentscope.response.time_to_first_token_ms",
-                                        value));
+                .ifPresent(value -> span.setAttribute(ClsFields.RESPONSE_TTFT_MS, value));
     }
 
     private static void applyToolEvent(Map<String, List<ToolSpan>> tools, AgentEvent event) {

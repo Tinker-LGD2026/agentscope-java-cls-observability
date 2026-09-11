@@ -80,6 +80,83 @@ class ClsSpanEncoderTest {
     }
 
     @Test
+    void encodesAndValidatesReasoningAttributeTypes() throws Exception {
+        CapturingExporter capture = new CapturingExporter();
+        Resource resource =
+                Resource.builder()
+                        .put("service.name", "test-service")
+                        .put("host.name", "test-host")
+                        .build();
+        try (SdkTracerProvider provider =
+                SdkTracerProvider.builder()
+                        .setResource(resource)
+                        .addSpanProcessor(SimpleSpanProcessor.create(capture))
+                        .build()) {
+            Span span =
+                    provider.get("test").spanBuilder("chat model-x")
+                            .setAttribute(ClsFields.SPAN_KIND, "chat")
+                            .setAttribute(ClsFields.OPERATION_NAME, "chat")
+                            .setAttribute(ClsFields.AGENT_TYPE, "agentscope-java")
+                            .setAttribute(ClsFields.SESSION_ID, "session-1")
+                            .setAttribute(ClsFields.TURN_ID, "turn-1")
+                            .setAttribute(ClsFields.USER_ID, "user-1")
+                            .setAttribute(ClsFields.USER_NAME, "User One")
+                            .setAttribute(ClsFields.REASONING_PRESENT, true)
+                            .setAttribute(ClsFields.REASONING_BLOCK_COUNT, 2L)
+                            .setAttribute(ClsFields.REASONING_OUTPUT_BYTES, 1024L)
+                            .setAttribute(ClsFields.REASONING_DURATION_MS, 50L)
+                            .setAttribute(ClsFields.REASONING_TTFT_MS, 10L)
+                            .setAttribute(ClsFields.REASONING_CAPTURE_MODE, "truncate")
+                            .setAttribute(ClsFields.REASONING_TRUNCATED, false)
+                            .setAttribute(ClsFields.REASONING_MALFORMED_EVENTS, 0L)
+                            .setAttribute(ClsFields.RESPONSE_TTFT_MS, 80L)
+                            .setAttribute(
+                                    "gen_ai.output.messages",
+                                    "[{\"role\":\"assistant\",\"parts\":["
+                                            + "{\"type\":\"reasoning\",\"content\":\"plan\"},"
+                                            + "{\"type\":\"reasoning_hash\","
+                                            + "\"sha256\":\"" + "a".repeat(64) + "\","
+                                            + "\"original_bytes\":4}]}]")
+                            .startSpan();
+            span.end();
+        }
+
+        ClsSpanRecord record = new ClsSpanEncoder(JSON).encode(capture.single());
+        JsonNode attributes = JSON.readTree(record.attribute());
+
+        assertThat(attributes.get(ClsFields.REASONING_PRESENT).isBoolean()).isTrue();
+        assertThat(attributes.get(ClsFields.REASONING_BLOCK_COUNT).isIntegralNumber()).isTrue();
+        assertThat(attributes.get(ClsFields.REASONING_CAPTURE_MODE).asText())
+                .isEqualTo("truncate");
+        assertThat(attributes.get(ClsFields.REASONING_TRUNCATED).isBoolean()).isTrue();
+        assertThat(new ClsSpanValidator(JSON).validate(record)).isEmpty();
+    }
+
+    @Test
+    void validatorRejectsInvalidReasoningTypesModeAndHashEnvelope() {
+        String attributes =
+                "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
+                        + "\"gen_ai.agent.type\":\"agentscope-java\","
+                        + "\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\","
+                        + "\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\","
+                        + "\"agentscope.reasoning.present\":\"yes\","
+                        + "\"agentscope.reasoning.block_count\":\"two\","
+                        + "\"agentscope.reasoning.capture_mode\":\"raw\","
+                        + "\"gen_ai.output.messages\":[{\"role\":\"assistant\",\"parts\":["
+                        + "{\"type\":\"reasoning_hash\",\"sha256\":\"bad\","
+                        + "\"original_bytes\":-1}]}]}";
+        ClsSpanRecord record = validRecord(attributes);
+
+        assertThat(new ClsSpanValidator(JSON).validate(record))
+                .contains(
+                        "attribute.agentscope.reasoning.present must be a boolean",
+                        "attribute.agentscope.reasoning.block_count must be an integer",
+                        "attribute.agentscope.reasoning.capture_mode is unsupported",
+                        "attribute.gen_ai.output.messages reasoning_hash.sha256 is invalid",
+                        "attribute.gen_ai.output.messages reasoning_hash.original_bytes must be non-negative");
+    }
+
+    @Test
     void restoresStructuredJsonForMessageAndToolAttributes() throws Exception {
         CapturingExporter capture = new CapturingExporter();
         Resource resource =
@@ -175,6 +252,25 @@ class ClsSpanEncoderTest {
                         "attribute.gen_ai.tool.name is required",
                         "attribute.gen_ai.tool.type is required",
                         "attribute.gen_ai.tool.call.duration_ms must be an integer");
+    }
+
+    private static ClsSpanRecord validRecord(String attributes) {
+        return new ClsSpanRecord(
+                "0123456789abcdef0123456789abcdef",
+                "0123456789abcdef",
+                "",
+                "chat model-x",
+                "client",
+                "100",
+                "200",
+                "100",
+                "OK",
+                "",
+                attributes,
+                "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                "",
+                "[]",
+                "[]");
     }
 
     private static final class CapturingExporter implements SpanExporter {

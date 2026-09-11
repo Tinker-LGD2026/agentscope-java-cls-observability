@@ -11,6 +11,19 @@ public final class ClsFields {
     public static final String STEP_ID = "gen_ai.step.id";
     public static final String USER_ID = "gen_ai.user.id";
     public static final String USER_NAME = "gen_ai.user.name";
+    public static final String REASONING_PRESENT = "agentscope.reasoning.present";
+    public static final String REASONING_BLOCK_COUNT = "agentscope.reasoning.block_count";
+    public static final String REASONING_OUTPUT_BYTES = "agentscope.reasoning.output_bytes";
+    public static final String REASONING_DURATION_MS = "agentscope.reasoning.duration_ms";
+    public static final String REASONING_TTFT_MS =
+            "agentscope.reasoning.time_to_first_token_ms";
+    public static final String REASONING_CAPTURE_MODE =
+            "agentscope.reasoning.capture_mode";
+    public static final String REASONING_TRUNCATED = "agentscope.reasoning.truncated";
+    public static final String REASONING_MALFORMED_EVENTS =
+            "agentscope.reasoning.malformed_event_count";
+    public static final String RESPONSE_TTFT_MS =
+            "agentscope.response.time_to_first_token_ms";
 
     private ClsFields() {}
 }

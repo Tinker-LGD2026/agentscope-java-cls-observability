@@ -65,17 +65,29 @@ Entry 顶层名称固定为 `enter_application`，不会拼接 `service.name`。
 
 | 环境变量 | 默认值 | 范围 | 说明 |
 |---|---:|---:|---|
-| `CLS_CONTENT_CAPTURE` | `off` | off/hash/truncate/full | 正文采集策略 |
+| `CLS_CONTENT_CAPTURE` | `off` | off/hash/truncate/full | 普通消息正文、工具参数和结果的采集策略 |
+| `CLS_REASONING_CAPTURE` | `off` | off/hash/truncate/full | 模型推理正文的独立采集策略 |
 | `CLS_MAX_CONTENT_BYTES` | `1100000` | 256–1100000 | 单个正文类 Attribute 的 UTF-8 字节上限 |
 
-模式：
+普通正文模式（`CLS_CONTENT_CAPTURE`）：
 
 | 模式 | 行为 |
 |---|---|
-| `off` | 不上传消息正文、工具参数和工具结果；Chat 仍记录输入消息 SHA-256 |
-| `hash` | 正文属性只保存完整内容 SHA-256 和原始字节数 |
+| `off` | 不上传普通消息正文、工具参数和工具结果；Chat 仍记录普通输入消息 SHA-256 |
+| `hash` | 普通正文属性只保存完整内容 SHA-256 和原始字节数 |
 | `truncate` | 脱敏后采集，超预算时截断或摘要 |
 | `full` | 尽可能采集脱敏正文，但仍受同一硬预算限制 |
+
+Reasoning 使用同名四种模式，但 `CLS_REASONING_CAPTURE=off` 不保存推理原文或稳定 Hash，只保留非正文指标。
+
+普通正文和 Reasoning 模式互不继承。生产环境推荐：
+
+```bash
+export CLS_CONTENT_CAPTURE=truncate
+export CLS_REASONING_CAPTURE=off
+```
+
+这允许采集脱敏后的最终回答和工具内容，但不会上传模型推理原文或其稳定 Hash。`CLS_MAX_CONTENT_BYTES` 仍是最终消息 Attribute 的统一硬上限；预算不足时优先保留最终 Text，Reasoning 优先降级或移除。
 
 单字段预算分别应用于：
 
@@ -84,7 +96,7 @@ Entry 顶层名称固定为 `enter_application`，不会拼接 `service.name`。
 - `gen_ai.tool.call.arguments`；
 - `gen_ai.tool.call.result`。
 
-所有采集模式都不应被视为 DLP。`off` 模式中的稳定无盐 Hash 也可能关联相同输入，详见 [`security-and-privacy.md`](security-and-privacy.md)。
+所有采集模式都不应被视为 DLP。普通正文 `CLS_CONTENT_CAPTURE=off` 下的稳定无盐 Chat 输入 Hash 也可能关联相同输入；Reasoning `off` 不生成该 Hash。详见 [`security-and-privacy.md`](security-and-privacy.md)。
 
 ## 导出性能参数
 

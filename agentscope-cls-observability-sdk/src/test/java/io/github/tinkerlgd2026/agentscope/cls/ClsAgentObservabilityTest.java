@@ -2,11 +2,29 @@ package io.github.tinkerlgd2026.agentscope.cls;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.agent.Agent;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.AgentResultEvent;
+import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
+import io.agentscope.core.middleware.AgentInput;
+import io.agentscope.core.middleware.ModelCallInput;
+import io.agentscope.core.model.Model;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord;
 import io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
@@ -32,6 +50,89 @@ class ClsAgentObservabilityTest {
         observability.close();
         observability.close();
         assertThat(sink.closeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void productionAssemblyAppliesReasoningPrivacyToChatAgentAndEntrySpans() throws Exception {
+        RecordingSink sink = new RecordingSink();
+        ClsObservabilityConfig config =
+                ClsObservabilityConfig.builder()
+                        .contentCaptureMode(ContentCaptureMode.TRUNCATE)
+                        .reasoningCaptureMode(ContentCaptureMode.OFF)
+                        .build();
+        ClsAgentObservability observability = ClsAgentObservability.create(config, sink);
+        Agent agent = org.mockito.Mockito.mock(Agent.class);
+        Model model = org.mockito.Mockito.mock(Model.class);
+        org.mockito.Mockito.when(agent.getName()).thenReturn("assistant");
+        org.mockito.Mockito.when(agent.getAgentId()).thenReturn("agent-1");
+        org.mockito.Mockito.when(model.getModelName()).thenReturn("generic-model");
+        RuntimeContext context =
+                RuntimeContext.builder().sessionId("session-1").userId("user-1").build();
+        Msg input =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(List.of(
+                                ThinkingBlock.builder().thinking("input-secret").build(),
+                                TextBlock.builder().text("input-visible").build()))
+                        .build();
+        Msg result =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(List.of(
+                                ThinkingBlock.builder().thinking("result-secret").build(),
+                                TextBlock.builder().text("result-visible").build()))
+                        .build();
+
+        observability
+                .middleware()
+                .onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of(input)),
+                        ignoredAgent ->
+                                observability.middleware().onModelCall(
+                                        agent,
+                                        context,
+                                        new ModelCallInput(List.of(input), List.of(), null, model),
+                                        ignoredModel ->
+                                                reactor.core.publisher.Flux.just(
+                                                        new ThinkingBlockDeltaEvent(
+                                                                "reply", "think", "chat-secret"),
+                                                        new TextBlockDeltaEvent(
+                                                                "reply", "text", "chat-visible"),
+                                                        new AgentResultEvent(
+                                                                "session-1", "reply", result))))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+        assertThat(observability.flush(Duration.ofSeconds(2))).isTrue();
+        observability.close();
+
+        ObjectMapper json = new ObjectMapper();
+        Map<String, ClsSpanRecord> byKind =
+                sink.records.stream()
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        record -> {
+                                            try {
+                                                return json.readTree(record.attribute())
+                                                        .path("gen_ai.span.kind")
+                                                        .asText();
+                                            } catch (Exception exception) {
+                                                throw new IllegalArgumentException(exception);
+                                            }
+                                        },
+                                        record -> record,
+                                        (first, ignored) -> first));
+        assertThat(byKind).containsKeys("entry", "agent", "chat");
+        assertThat(byKind.get("entry").attribute())
+                .contains("input-visible", "result-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
+        assertThat(byKind.get("agent").attribute())
+                .contains("input-visible", "result-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
+        assertThat(byKind.get("chat").attribute())
+                .contains("input-visible", "chat-visible")
+                .doesNotContain("input-secret", "result-secret", "chat-secret");
     }
 
     @Test
@@ -166,10 +267,12 @@ class ClsAgentObservabilityTest {
     }
 
     private static final class RecordingSink implements SpanSink {
+        private final List<ClsSpanRecord> records = new CopyOnWriteArrayList<>();
         private int closeCalls;
 
         @Override
         public CompletionStage<Void> export(List<ClsSpanRecord> records) {
+            this.records.addAll(records);
             return CompletableFuture.completedFuture(null);
         }
 

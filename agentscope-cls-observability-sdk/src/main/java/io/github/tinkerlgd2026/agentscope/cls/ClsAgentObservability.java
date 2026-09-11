@@ -7,6 +7,7 @@ import io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddlewa
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator;
 import io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink;
@@ -120,6 +121,14 @@ public final class ClsAgentObservability implements AutoCloseable {
                                 objectMapper,
                                 config.contentCaptureMode(),
                                 config.maxContentBytes()),
+                        new MessageCapturePolicy(
+                                objectMapper,
+                                config.contentCaptureMode(),
+                                config.reasoningCaptureMode(),
+                                config.maxContentBytes()),
+                        config.contentCaptureMode(),
+                        config.reasoningCaptureMode(),
+                        config.maxContentBytes(),
                         active::get,
                         counters,
                         objectMapper,

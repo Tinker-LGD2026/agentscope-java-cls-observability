@@ -9,6 +9,10 @@ public enum ContentCaptureMode {
     FULL;
 
     public static ContentCaptureMode parse(String value) {
+        return parse(value, "CLS_CONTENT_CAPTURE");
+    }
+
+    public static ContentCaptureMode parse(String value, String settingName) {
         if (value == null || value.isBlank()) {
             return OFF;
         }
@@ -16,7 +20,7 @@ public enum ContentCaptureMode {
             return valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException(
-                    "CLS_CONTENT_CAPTURE must be one of: off, hash, truncate, full", exception);
+                    settingName + " must be one of: off, hash, truncate, full", exception);
         }
     }
 }

@@ -109,7 +109,9 @@ graph TD
 ### Chat
 
 - 名称 `chat <model>`；
-- 记录模型、Provider、Token、finish reason、耗时和按策略采集的消息。
+- 记录模型、Provider、Token、finish reason、耗时和按策略采集的消息；
+- 统一消费 AgentScope 的 Thinking、Text 和 Tool Call 块事件，按首次出现顺序生成输出 parts；
+- Provider Extension 负责把各家原始协议转换成 `ThinkingBlock`，SDK 不解析 Provider 私有字段。
 
 ### Tool
 
@@ -133,6 +135,14 @@ Entry
 ```
 
 子 Agent 和委派 Tool 都位于同一 Trace，但子 Agent 直接挂在父 Agent 下，而不是挂在 Tool Span 下。它们通过共同的父 Agent、Session、Turn 和 Trace 关联。
+
+## Reasoning 归一化链路
+
+```text
+Provider Extension → ThinkingBlock Events → ClsTracingMiddleware → Chat Span
+```
+
+例如 OpenAI-compatible、Anthropic 或 Gemini 的原始推理协议差异应由对应 AgentScope Extension 处理。Middleware 只认识 AgentScope Core 的通用块与事件，不上传 signature、密文或 Provider metadata。
 
 ## 正文处理
 

@@ -42,6 +42,29 @@ class ClsSpanExporterTest {
     }
 
     @Test
+    void rejectsInvalidReasoningHashWithoutDroppingValidSiblingSpan() {
+        ObjectMapper json = new ObjectMapper();
+        InMemorySpanSink sink = new InMemorySpanSink();
+        TelemetryCounters counters = new TelemetryCounters();
+        ClsSpanExporter exporter =
+                new ClsSpanExporter(
+                        new ClsSpanEncoder(json), new ClsSpanValidator(json), sink, counters);
+
+        CompletableResultCode result =
+                exporter.export(List.of(reasoningSpanData(true), reasoningSpanData(false)));
+        result.join(1, TimeUnit.SECONDS);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(sink.records()).singleElement().satisfies(
+                record -> {
+                    assertThat(record.name()).isEqualTo("chat valid-reasoning");
+                    assertThat(record.attribute()).contains("a".repeat(64)).doesNotContain("bad");
+                });
+        assertThat(counters.snapshot().acceptedSpans()).isEqualTo(1);
+        assertThat(counters.snapshot().invalidSpans()).isEqualTo(1);
+    }
+
+    @Test
     void keepsValidSpansWhenBatchContainsInvalidSpan() {
         ObjectMapper json = new ObjectMapper();
         InMemorySpanSink sink = new InMemorySpanSink();
@@ -58,6 +81,38 @@ class ClsSpanExporterTest {
         assertThat(sink.records()).hasSize(2);
         assertThat(counters.snapshot().invalidSpans()).isEqualTo(1);
         assertThat(counters.snapshot().acceptedSpans()).isEqualTo(2);
+    }
+
+    private static SpanData reasoningSpanData(boolean validHash) {
+        CapturingExporter capture = new CapturingExporter();
+        Resource resource =
+                Resource.builder().put("service.name", "svc").put("host.name", "host").build();
+        try (SdkTracerProvider provider =
+                SdkTracerProvider.builder()
+                        .setResource(resource)
+                        .addSpanProcessor(SimpleSpanProcessor.create(capture))
+                        .build()) {
+            String hash = validHash ? "a".repeat(64) : "bad";
+            Span span =
+                    provider.get("test")
+                            .spanBuilder(validHash ? "chat valid-reasoning" : "chat invalid-reasoning")
+                            .setAttribute("gen_ai.span.kind", "chat")
+                            .setAttribute("gen_ai.operation.name", "chat")
+                            .setAttribute("gen_ai.agent.type", "agentscope-java")
+                            .setAttribute("gen_ai.session.id", "session")
+                            .setAttribute("gen_ai.turn.id", "turn")
+                            .setAttribute("gen_ai.user.id", "user")
+                            .setAttribute("gen_ai.user.name", "User")
+                            .setAttribute(
+                                    "gen_ai.output.messages",
+                                    "[{\"role\":\"assistant\",\"parts\":[{"
+                                            + "\"type\":\"reasoning_hash\","
+                                            + "\"sha256\":\"" + hash + "\","
+                                            + "\"original_bytes\":4}]}]")
+                            .startSpan();
+            span.end();
+        }
+        return capture.spans.get(0);
     }
 
     private static SpanData spanData(boolean valid) {

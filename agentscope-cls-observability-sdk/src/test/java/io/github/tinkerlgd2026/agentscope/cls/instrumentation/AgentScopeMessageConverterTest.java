@@ -15,6 +15,53 @@ import org.junit.jupiter.api.Test;
 class AgentScopeMessageConverterTest {
 
     @Test
+    void neverCopiesThinkingProviderMetadata() {
+        Msg assistant =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(
+                                List.of(
+                                        ThinkingBlock.builder()
+                                                .thinking("visible reasoning")
+                                                .metadata(
+                                                        Map.of(
+                                                                "signature", "provider-signature",
+                                                                "encrypted", "opaque-ciphertext"))
+                                                .build()))
+                        .build();
+
+        String converted = new AgentScopeMessageConverter().convert(List.of(assistant)).toString();
+
+        assertThat(converted)
+                .contains("visible reasoning")
+                .doesNotContain("provider-signature", "opaque-ciphertext", "metadata");
+    }
+
+    @Test
+    void boundsConversionWhilePreservingLatestTextAndToolIdentity() {
+        List<io.agentscope.core.message.ContentBlock> blocks = new java.util.ArrayList<>();
+        for (int index = 0; index < 400; index++) {
+            blocks.add(ThinkingBlock.builder().thinking("old-plan-" + index).build());
+        }
+        blocks.add(TextBlock.builder().text("final-answer").build());
+        blocks.add(
+                ToolUseBlock.builder()
+                        .id("call-final")
+                        .name("search")
+                        .input(Map.of("query", "weather"))
+                        .build());
+        Msg assistant = Msg.builder().role(MsgRole.ASSISTANT).content(blocks).build();
+
+        AgentScopeMessageConverter.ConversionResult converted =
+                new AgentScopeMessageConverter().convertBounded(List.of(assistant));
+        String value = converted.messages().toString();
+
+        assertThat(converted.complete()).isFalse();
+        assertThat(value).contains("final-answer", "call-final", "search");
+        assertThat(value.length()).isLessThan(10_000);
+    }
+
+    @Test
     void convertsAgentScopeMessagesToClsRolePartsSchema() {
         Msg user =
                 Msg.builder()

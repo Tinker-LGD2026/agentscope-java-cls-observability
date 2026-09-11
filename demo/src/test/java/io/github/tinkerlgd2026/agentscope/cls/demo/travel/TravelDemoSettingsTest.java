@@ -46,6 +46,28 @@ class TravelDemoSettingsTest {
     }
 
     @Test
+    void reasoningIsExplicitAndDisabledByDefault() {
+        TravelDemoSettings defaults =
+                TravelDemoSettings.fromEnvironment(Map.of("DEEPSEEK_API_KEY", "test-key"));
+        TravelDemoSettings enabled =
+                TravelDemoSettings.fromEnvironment(
+                        Map.of(
+                                "DEEPSEEK_API_KEY", "test-key",
+                                "TRAVEL_ENABLE_REASONING", "true"));
+
+        assertThat(defaults.reasoningEnabled()).isFalse();
+        assertThat(enabled.reasoningEnabled()).isTrue();
+        assertThatThrownBy(
+                        () ->
+                                TravelDemoSettings.fromEnvironment(
+                                        Map.of(
+                                                "DEEPSEEK_API_KEY", "test-key",
+                                                "TRAVEL_ENABLE_REASONING", "yes")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("TRAVEL_ENABLE_REASONING");
+    }
+
+    @Test
     void acceptsCustomerIdentityAndPromptOverrides() {
         TravelDemoSettings settings =
                 TravelDemoSettings.fromEnvironment(

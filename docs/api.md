@@ -1,6 +1,6 @@
 # 公共 API
 
-当前版本为 `0.1.x` 公开预览。1.0.0 前，minor 版本可能调整 API。
+当前开发版本为 `0.2.0-SNAPSHOT`；最新已发布版本为 `0.1.x` 公开预览。1.0.0 前，minor 版本可能调整 API。
 
 ## 稳定预览 API
 
@@ -52,3 +52,29 @@
 `RuntimeContext` 每次顶层调用创建。子 Agent通过 AgentScope 自动继承。
 
 身份字段会在写入 Span 前按 UTF-8 字节有界化：Session/User/Turn 为 512 bytes，User Name 为 256 bytes，Agent/Entry Type 为 128 bytes。超长值使用有界前缀和稳定 SHA-256 短指纹，保证同一原值稳定映射且不同长值不易碰撞。
+
+## 通用 Reasoning Chat Span
+
+SDK 消费 AgentScope Core 的 `ThinkingBlock` 与 `ThinkingBlockStartEvent`、`ThinkingBlockDeltaEvent`、`ThinkingBlockEndEvent`，不解析任何模型 Provider 私有字段。开启 Reasoning 正文采集时，Chat 输出使用中性消息结构：
+
+```json
+[
+  {
+    "role": "assistant",
+    "parts": [
+      {"type": "reasoning", "content": "经过策略处理的推理文本"},
+      {"type": "text", "content": "最终回答"}
+    ]
+  }
+]
+```
+
+Hash 模式使用：
+
+```json
+{"type":"reasoning_hash","sha256":"<64位小写十六进制>","original_bytes":18240}
+```
+
+上述同时包含 `reasoning` 和 `text` 的示例假设 `CLS_REASONING_CAPTURE` 与 `CLS_CONTENT_CAPTURE` 均已开启；两类正文仍分别受各自策略控制。
+
+Chat Span 还可能包含 `agentscope.reasoning.present`、块数、原始字节数、推理持续时间、推理首片段时间、回答首片段时间和截断状态。`agentscope.reasoning.malformed_event_count` 统计本次模型输出中 Thinking、Text 与 Tool Call 块生命周期的全部畸形事件；字段保留 `reasoning` 前缀是当前扩展 Schema 的兼容约定，并非只统计 Thinking 块。AgentScope 2.0.3 未统一暴露 Reasoning Token，因此未知时不写 `gen_ai.usage.reasoning_output_tokens`，不会用固定 `0` 或本地估算冒充真实值。

@@ -9,6 +9,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Added bounded Reasoning metrics for presence, block count, bytes, duration, reasoning/response time to first token, and truncation; the compatibility-named malformed-event field covers Thinking, Text, and Tool Call output block lifecycles.
 - Removed misleading zero-valued reasoning token attributes when upstream usage is unavailable.
 - Added explicit Thinking controls to the travel Demo and Provider-neutral end-to-end integration coverage.
+- Verified live with DeepSeek `deepseek-chat` Thinking enabled: ordered reasoning/text Chat parts, privacy isolation, `off` semantics, and clean CLS delivery counters.
 
 ## [0.1.0] - 2026-09-10
 

@@ -4,12 +4,24 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
-- Added provider-neutral AgentScope `ThinkingBlock` event capture for ordered Chat Span reasoning, text, and tool-call parts.
-- Added independent `CLS_REASONING_CAPTURE` privacy control, defaulting to `off` without reasoning plaintext or stable Hash.
-- Added bounded Reasoning metrics for presence, block count, bytes, duration, reasoning/response time to first token, and truncation; the compatibility-named malformed-event field covers Thinking, Text, and Tool Call output block lifecycles.
-- Removed misleading zero-valued reasoning token attributes when upstream usage is unavailable.
-- Added explicit Thinking controls to the travel Demo and Provider-neutral end-to-end integration coverage.
-- Verified live with DeepSeek `deepseek-chat` Thinking enabled: ordered reasoning/text Chat parts, privacy isolation, `off` semantics, and clean CLS delivery counters.
+## [0.2.0] - 2026-09-12
+
+### Added
+
+- Provider-neutral AgentScope `ThinkingBlock` event capture for ordered Chat Span reasoning, text, and tool-call parts.
+- Independent `CLS_REASONING_CAPTURE` privacy control, defaulting to `off` without reasoning plaintext or stable Hash.
+- Bounded Reasoning metrics for presence, block count, bytes, duration, reasoning/response time to first token, and truncation; the compatibility-named malformed-event field covers Thinking, Text, and Tool Call output block lifecycles.
+- Explicit Thinking controls in the travel Demo and Provider-neutral end-to-end integration coverage.
+- Bounded message conversion and streamed output accumulation with fixed memory/part limits; final budgets preserve the latest final answer and Tool identity first.
+- Incomplete message conversion no longer publishes a misleading input Hash.
+
+### Changed
+
+- Misleading zero-valued reasoning token attributes are omitted when upstream usage is unavailable.
+
+### Verified
+
+- Live DeepSeek `deepseek-chat` Thinking enabled: ordered reasoning/text Chat parts, privacy isolation, `off` semantics, and clean CLS delivery counters.
 
 ## [0.1.0] - 2026-09-10
 

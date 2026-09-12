@@ -20,22 +20,22 @@ This phase publishes GitHub source and Release assets only. It does not publish 
 ./mvnw -pl agentscope-cls-observability-sdk javadoc:javadoc
 ```
 
-Confirm the POM version is the exact release version `0.1.0`. The release workflow rejects a tag whose `v`-stripped value differs from the POM version. After publishing, prepare the next development version in a separate change.
+Confirm the POM version is the exact release version (for example `0.2.0` for tag `v0.2.0`). The release workflow rejects a tag whose `v`-stripped value differs from the POM version. After publishing, prepare the next development version in a separate change.
 
 ## Tag
 
-Only after explicit repository-owner approval:
+Only after explicit repository-owner approval (replace `X.Y.Z` with the target version):
 
 ```bash
-git tag -a v0.1.0 -m "AgentScope CLS Observability SDK 0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "AgentScope CLS Observability SDK X.Y.Z"
+git push origin vX.Y.Z
 ```
 
 ## Expected assets
 
-- `agentscope-cls-observability-sdk-0.1.0.jar`
-- `agentscope-cls-observability-sdk-0.1.0-sources.jar`
-- `agentscope-cls-observability-sdk-0.1.0-javadoc.jar`
+- `agentscope-cls-observability-sdk-X.Y.Z.jar`
+- `agentscope-cls-observability-sdk-X.Y.Z-sources.jar`
+- `agentscope-cls-observability-sdk-X.Y.Z-javadoc.jar`
 - `bom.json`
 - `bom-consumer.json`
 - `SHA256SUMS`
@@ -48,7 +48,7 @@ Download all assets in a clean directory:
 
 ```bash
 sha256sum -c SHA256SUMS
-jar tf agentscope-cls-observability-sdk-0.1.0.jar
+jar tf agentscope-cls-observability-sdk-X.Y.Z.jar
 ```
 
 Confirm the GitHub Release states that installation is currently source clone plus `./mvnw install`; Maven Central is not yet available.

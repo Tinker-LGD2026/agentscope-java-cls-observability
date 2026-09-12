@@ -46,7 +46,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>17</maven.compiler.release>
         <agentscope.version>2.0.3</agentscope.version>
-        <opentelemetry.version>1.62.0</opentelemetry.version>
+        <opentelemetry.version>1.65.0</opentelemetry.version>
         <opentelemetry.instrumentation.version>2.28.0-alpha</opentelemetry.instrumentation.version>
         <jackson.version>2.21.5</jackson.version>
         <cls.sdk.version>1.0.17</cls.sdk.version>

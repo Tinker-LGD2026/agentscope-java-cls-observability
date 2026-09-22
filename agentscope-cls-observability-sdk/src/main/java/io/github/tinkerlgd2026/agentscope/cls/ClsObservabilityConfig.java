@@ -1,5 +1,9 @@
 package io.github.tinkerlgd2026.agentscope.cls;
 
+import static io.github.tinkerlgd2026.agentscope.cls.internal.config.ConfigBounds.*;
+
+import io.github.tinkerlgd2026.agentscope.cls.internal.config.EnvironmentConfigParser;
+import io.github.tinkerlgd2026.agentscope.cls.internal.config.ReactorModeResolver;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -11,16 +15,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+/** Immutable configuration for the CLS observability SDK. */
 public final class ClsObservabilityConfig {
-    private static final int DEFAULT_MAX_CONTENT_BYTES = 1_100_000;
-    private static final int MAX_CONTENT_BYTES = 1_100_000;
-    private static final int DEFAULT_EXPORT_SCHEDULE_DELAY_MS = 2000;
-    private static final int MIN_EXPORT_SCHEDULE_DELAY_MS = 50;
-    private static final int MAX_EXPORT_SCHEDULE_DELAY_MS = 60_000;
-    private static final int DEFAULT_MAX_QUEUE_SIZE = 4096;
-    private static final int MIN_MAX_QUEUE_SIZE = 256;
-    private static final int MAX_MAX_QUEUE_SIZE = 65_536;
+    private static final Logger LOGGER = LoggerFactory.getLogger(ClsObservabilityConfig.class);
     private static final Pattern CLS_HOST_PATTERN =
             Pattern.compile("^[a-z0-9-]+\\.cls\\.(?:tencentcs|tencentyun)\\.com$");
 
@@ -39,10 +39,22 @@ public final class ClsObservabilityConfig {
     private final String deploymentEnvironment;
     private final ContentCaptureMode contentCaptureMode;
     private final ContentCaptureMode reasoningCaptureMode;
+    private final ContentCaptureMode providerPayloadCaptureMode;
     private final int maxContentBytes;
-    private final boolean reactorContextHookEnabled;
+    private final int truncatePreviewBytes;
+    private final ReactorContextMode reactorContextMode;
     private final Duration exportScheduleDelay;
     private final int maxQueueSize;
+    private final Duration hitlWaitTimeout;
+    private final Duration shutdownTimeout;
+    private final Duration exportTimeout;
+    private final int maxExportBatchBytes;
+    private final int maxExportBatchCount;
+    private final Duration producerLinger;
+    private final boolean hostTraceLinkEnabled;
+    private final long maxInvocationCaptureMemoryBytes;
+    private final long maxCaptureMemoryBytes;
+    private final int maxProducerBufferBytes;
     private volatile boolean credentialsDestroyed;
 
     private ClsObservabilityConfig(Builder builder) {
@@ -56,10 +68,30 @@ public final class ClsObservabilityConfig {
         deploymentEnvironment = builder.deploymentEnvironment;
         contentCaptureMode = builder.contentCaptureMode;
         reasoningCaptureMode = builder.reasoningCaptureMode;
-        maxContentBytes = builder.maxContentBytes;
-        reactorContextHookEnabled = builder.reactorContextHookEnabled;
+        providerPayloadCaptureMode = builder.providerPayloadCaptureMode;
+        if (builder.maxContentBytes > MAX_CONTENT_BYTES) {
+            LOGGER.warn(
+                    "CLS max content bytes {} exceeds the 0.3 CLS field limit and was clamped to {}",
+                    builder.maxContentBytes,
+                    MAX_CONTENT_BYTES);
+        }
+        maxContentBytes = Math.min(builder.maxContentBytes, MAX_CONTENT_BYTES);
+        truncatePreviewBytes = builder.truncatePreviewBytes;
+        reactorContextMode =
+                ReactorModeResolver.resolve(
+                        builder.explicitReactorContextMode, builder.legacyReactorContextHookEnabled);
         exportScheduleDelay = builder.exportScheduleDelay;
         maxQueueSize = builder.maxQueueSize;
+        hitlWaitTimeout = builder.hitlWaitTimeout;
+        shutdownTimeout = builder.shutdownTimeout;
+        exportTimeout = builder.exportTimeout;
+        maxExportBatchBytes = builder.maxExportBatchBytes;
+        maxExportBatchCount = builder.maxExportBatchCount;
+        producerLinger = builder.producerLinger;
+        hostTraceLinkEnabled = builder.hostTraceLinkEnabled;
+        maxInvocationCaptureMemoryBytes = builder.maxInvocationCaptureMemoryBytes;
+        maxCaptureMemoryBytes = builder.maxCaptureMemoryBytes;
+        maxProducerBufferBytes = builder.maxProducerBufferBytes;
     }
 
     public static Builder builder() {
@@ -70,70 +102,7 @@ public final class ClsObservabilityConfig {
         if (environment == null) {
             throw new IllegalArgumentException("environment must not be null");
         }
-        String endpoint = clean(environment.get("CLS_ENDPOINT"));
-        String topicId = clean(environment.get("CLS_TOPIC_ID"));
-        String secretId = clean(environment.get("CLS_SECRET_ID"));
-        String secretKey = clean(environment.get("CLS_SECRET_KEY"));
-        String transport = clean(environment.get("CLS_TRANSPORT"));
-        boolean anyCloudValue =
-                endpoint != null || topicId != null || secretId != null || secretKey != null;
-        boolean cloud = "cloud".equalsIgnoreCase(transport) || (transport == null && anyCloudValue);
-        if (transport != null
-                && !"cloud".equalsIgnoreCase(transport)
-                && !"console".equalsIgnoreCase(transport)) {
-            throw new IllegalArgumentException("CLS_TRANSPORT must be console or cloud");
-        }
-        if (cloud && (endpoint == null || topicId == null || secretId == null || secretKey == null)) {
-            throw new IllegalArgumentException("CLS cloud configuration is incomplete");
-        }
-
-        Builder builder =
-                builder()
-                        .transportMode(cloud ? TransportMode.CLOUD : TransportMode.CONSOLE)
-                        .serviceName(
-                                defaultIfBlank(
-                                        environment.get("CLS_SERVICE_NAME"),
-                                        "agentscope-java-app"))
-                        .deploymentEnvironment(
-                                clean(environment.get("CLS_DEPLOYMENT_ENVIRONMENT")))
-                        .contentCaptureMode(
-                                ContentCaptureMode.parse(environment.get("CLS_CONTENT_CAPTURE")))
-                        .reasoningCaptureMode(
-                                ContentCaptureMode.parse(
-                                        environment.get("CLS_REASONING_CAPTURE"),
-                                        "CLS_REASONING_CAPTURE"))
-                        .maxContentBytes(
-                                parseContentBudget(environment.get("CLS_MAX_CONTENT_BYTES")))
-                        .reactorContextHookEnabled(
-                                parseBoolean(
-                                        environment.get("CLS_REACTOR_CONTEXT_HOOK"),
-                                        "CLS_REACTOR_CONTEXT_HOOK"))
-                        .exportScheduleDelay(
-                                Duration.ofMillis(
-                                        parseBoundedInt(
-                                                environment.get("CLS_EXPORT_SCHEDULE_DELAY_MS"),
-                                                "CLS_EXPORT_SCHEDULE_DELAY_MS",
-                                                DEFAULT_EXPORT_SCHEDULE_DELAY_MS,
-                                                MIN_EXPORT_SCHEDULE_DELAY_MS,
-                                                MAX_EXPORT_SCHEDULE_DELAY_MS)))
-                        .maxQueueSize(
-                                parseBoundedInt(
-                                        environment.get("CLS_MAX_QUEUE_SIZE"),
-                                        "CLS_MAX_QUEUE_SIZE",
-                                        DEFAULT_MAX_QUEUE_SIZE,
-                                        MIN_MAX_QUEUE_SIZE,
-                                        MAX_MAX_QUEUE_SIZE));
-        if (cloud) {
-            builder.endpoint(Objects.requireNonNull(endpoint))
-                    .topicId(Objects.requireNonNull(topicId))
-                    .secretId(Objects.requireNonNull(secretId).toCharArray())
-                    .secretKey(Objects.requireNonNull(secretKey).toCharArray());
-            String token = clean(environment.get("CLS_SECRET_TOKEN"));
-            if (token != null) {
-                builder.secretToken(token.toCharArray());
-            }
-        }
-        return builder.build();
+        return EnvironmentConfigParser.parse(environment);
     }
 
     public TransportMode transportMode() {
@@ -162,13 +131,7 @@ public final class ClsObservabilityConfig {
                 : Optional.of(copy(secretToken));
     }
 
-    /**
-     * Overwrites the retained credential characters and makes further reads return nothing.
-     *
-     * <p>Call this once the SDK has been created so long-lived processes do not keep CLS
-     * credentials reachable in the heap. The same configuration object cannot create another
-     * cloud transport afterwards.
-     */
+    /** Overwrites retained credential characters and prevents future reads. */
     public void destroyCredentials() {
         credentialsDestroyed = true;
         clear(secretId);
@@ -176,8 +139,13 @@ public final class ClsObservabilityConfig {
         clear(secretToken);
     }
 
+    /** Deprecated compatibility view of the 0.2 process-wide hook option. */
     public boolean reactorContextHookEnabled() {
-        return reactorContextHookEnabled;
+        return reactorContextMode == ReactorContextMode.LEGACY_HOOK;
+    }
+
+    public ReactorContextMode reactorContextMode() {
+        return reactorContextMode;
     }
 
     public Duration exportScheduleDelay() {
@@ -204,85 +172,87 @@ public final class ClsObservabilityConfig {
         return reasoningCaptureMode;
     }
 
+    public ContentCaptureMode providerPayloadCaptureMode() {
+        return providerPayloadCaptureMode;
+    }
+
     public int maxContentBytes() {
         return maxContentBytes;
+    }
+
+    public int truncatePreviewBytes() {
+        return truncatePreviewBytes;
+    }
+
+    public Duration hitlWaitTimeout() {
+        return hitlWaitTimeout;
+    }
+
+    public Duration shutdownTimeout() {
+        return shutdownTimeout;
+    }
+
+    public Duration exportTimeout() {
+        return exportTimeout;
+    }
+
+    public int maxExportBatchBytes() {
+        return maxExportBatchBytes;
+    }
+
+    public int maxExportBatchCount() {
+        return maxExportBatchCount;
+    }
+
+    public Duration producerLinger() {
+        return producerLinger;
+    }
+
+    public boolean hostTraceLinkEnabled() {
+        return hostTraceLinkEnabled;
+    }
+
+    public long maxInvocationCaptureMemoryBytes() {
+        return maxInvocationCaptureMemoryBytes;
+    }
+
+    public long maxCaptureMemoryBytes() {
+        return maxCaptureMemoryBytes;
+    }
+
+    public int maxProducerBufferBytes() {
+        return maxProducerBufferBytes;
     }
 
     @Override
     public String toString() {
         return "ClsObservabilityConfig{"
-                + "transportMode="
-                + transportMode
-                + ", endpoint="
-                + endpoint
-                + ", topicConfigured="
-                + (topicId != null)
+                + "transportMode=" + transportMode
+                + ", endpoint=" + endpoint
+                + ", topicConfigured=" + (topicId != null)
                 + ", credentialsConfigured="
                 + (!credentialsDestroyed && secretId != null && secretKey != null)
-                + ", serviceName='"
-                + serviceName
-                + '\''
-                + ", deploymentEnvironment='"
-                + deploymentEnvironment
-                + '\''
-                + ", contentCaptureMode="
-                + contentCaptureMode
-                + ", reasoningCaptureMode="
-                + reasoningCaptureMode
-                + ", maxContentBytes="
-                + maxContentBytes
-                + ", reactorContextHookEnabled="
-                + reactorContextHookEnabled
-                + ", exportScheduleDelayMs="
-                + exportScheduleDelay.toMillis()
-                + ", maxQueueSize="
-                + maxQueueSize
+                + ", serviceName='" + serviceName + '\''
+                + ", deploymentEnvironment='" + deploymentEnvironment + '\''
+                + ", contentCaptureMode=" + contentCaptureMode
+                + ", reasoningCaptureMode=" + reasoningCaptureMode
+                + ", providerPayloadCaptureMode=" + providerPayloadCaptureMode
+                + ", maxContentBytes=" + maxContentBytes
+                + ", truncatePreviewBytes=" + truncatePreviewBytes
+                + ", reactorContextMode=" + reactorContextMode
+                + ", exportScheduleDelayMs=" + exportScheduleDelay.toMillis()
+                + ", maxQueueSize=" + maxQueueSize
+                + ", hitlWaitTimeoutMs=" + hitlWaitTimeout.toMillis()
+                + ", shutdownTimeoutMs=" + shutdownTimeout.toMillis()
+                + ", exportTimeoutMs=" + exportTimeout.toMillis()
+                + ", maxExportBatchBytes=" + maxExportBatchBytes
+                + ", maxExportBatchCount=" + maxExportBatchCount
+                + ", producerLingerMs=" + producerLinger.toMillis()
+                + ", hostTraceLinkEnabled=" + hostTraceLinkEnabled
+                + ", maxInvocationCaptureMemoryBytes=" + maxInvocationCaptureMemoryBytes
+                + ", maxCaptureMemoryBytes=" + maxCaptureMemoryBytes
+                + ", maxProducerBufferBytes=" + maxProducerBufferBytes
                 + '}';
-    }
-
-    private static boolean parseBoolean(String raw, String name) {
-        String value = clean(raw);
-        if (value == null) {
-            return false;
-        }
-        if ("true".equalsIgnoreCase(value)) {
-            return true;
-        }
-        if ("false".equalsIgnoreCase(value)) {
-            return false;
-        }
-        throw new IllegalArgumentException(name + " must be true or false");
-    }
-
-    private static int parseBoundedInt(
-            String raw, String name, int fallback, int minimum, int maximum) {
-        String value = clean(raw);
-        if (value == null) {
-            return fallback;
-        }
-        int parsed;
-        try {
-            parsed = Integer.parseInt(value);
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(name + " must be an integer", exception);
-        }
-        if (parsed < minimum || parsed > maximum) {
-            throw new IllegalArgumentException(
-                    name + " must be between " + minimum + " and " + maximum);
-        }
-        return parsed;
-    }
-
-    private static int parseContentBudget(String raw) {
-        String value = clean(raw);
-        if (value == null) {
-            return DEFAULT_MAX_CONTENT_BYTES;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("CLS_MAX_CONTENT_BYTES must be an integer", exception);
-        }
     }
 
     private static URI normalizeEndpoint(String raw) {
@@ -344,10 +314,24 @@ public final class ClsObservabilityConfig {
         private String deploymentEnvironment;
         private ContentCaptureMode contentCaptureMode = ContentCaptureMode.OFF;
         private ContentCaptureMode reasoningCaptureMode = ContentCaptureMode.OFF;
+        private ContentCaptureMode providerPayloadCaptureMode = ContentCaptureMode.OFF;
         private int maxContentBytes = DEFAULT_MAX_CONTENT_BYTES;
-        private boolean reactorContextHookEnabled;
+        private int truncatePreviewBytes = DEFAULT_TRUNCATE_PREVIEW_BYTES;
+        private ReactorContextMode explicitReactorContextMode;
+        private Boolean legacyReactorContextHookEnabled;
         private Duration exportScheduleDelay = Duration.ofMillis(DEFAULT_EXPORT_SCHEDULE_DELAY_MS);
         private int maxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
+        private Duration hitlWaitTimeout = Duration.ofMillis(DEFAULT_HITL_WAIT_TIMEOUT_MS);
+        private Duration shutdownTimeout = Duration.ofMillis(DEFAULT_SHUTDOWN_TIMEOUT_MS);
+        private Duration exportTimeout = Duration.ofMillis(DEFAULT_EXPORT_TIMEOUT_MS);
+        private int maxExportBatchBytes = DEFAULT_MAX_EXPORT_BATCH_BYTES;
+        private int maxExportBatchCount = DEFAULT_MAX_EXPORT_BATCH_COUNT;
+        private Duration producerLinger = Duration.ofMillis(DEFAULT_PRODUCER_LINGER_MS);
+        private boolean hostTraceLinkEnabled = true;
+        private long maxInvocationCaptureMemoryBytes =
+                DEFAULT_MAX_INVOCATION_CAPTURE_MEMORY_BYTES;
+        private long maxCaptureMemoryBytes = DEFAULT_MAX_CAPTURE_MEMORY_BYTES;
+        private int maxProducerBufferBytes = DEFAULT_MAX_PRODUCER_BUFFER_BYTES;
 
         private Builder() {}
 
@@ -401,13 +385,29 @@ public final class ClsObservabilityConfig {
             return this;
         }
 
+        public Builder providerPayloadCaptureMode(ContentCaptureMode value) {
+            providerPayloadCaptureMode = value;
+            return this;
+        }
+
         public Builder maxContentBytes(int value) {
             maxContentBytes = value;
             return this;
         }
 
+        public Builder truncatePreviewBytes(int value) {
+            truncatePreviewBytes = value;
+            return this;
+        }
+
+        /** Deprecated compatibility setting from 0.2. */
         public Builder reactorContextHookEnabled(boolean value) {
-            reactorContextHookEnabled = value;
+            legacyReactorContextHookEnabled = value;
+            return this;
+        }
+
+        public Builder reactorContextMode(ReactorContextMode value) {
+            explicitReactorContextMode = value;
             return this;
         }
 
@@ -421,51 +421,111 @@ public final class ClsObservabilityConfig {
             return this;
         }
 
+        public Builder hitlWaitTimeout(Duration value) {
+            hitlWaitTimeout = value;
+            return this;
+        }
+
+        public Builder shutdownTimeout(Duration value) {
+            shutdownTimeout = value;
+            return this;
+        }
+
+        public Builder exportTimeout(Duration value) {
+            exportTimeout = value;
+            return this;
+        }
+
+        public Builder maxExportBatchBytes(int value) {
+            maxExportBatchBytes = value;
+            return this;
+        }
+
+        public Builder maxExportBatchCount(int value) {
+            maxExportBatchCount = value;
+            return this;
+        }
+
+        public Builder producerLinger(Duration value) {
+            producerLinger = value;
+            return this;
+        }
+
+        public Builder hostTraceLinkEnabled(boolean value) {
+            hostTraceLinkEnabled = value;
+            return this;
+        }
+
+        public Builder maxInvocationCaptureMemoryBytes(long value) {
+            maxInvocationCaptureMemoryBytes = value;
+            return this;
+        }
+
+        public Builder maxCaptureMemoryBytes(long value) {
+            maxCaptureMemoryBytes = value;
+            return this;
+        }
+
+        public Builder maxProducerBufferBytes(int value) {
+            maxProducerBufferBytes = value;
+            return this;
+        }
+
         public ClsObservabilityConfig build() {
-            if (transportMode == null) {
-                throw new IllegalArgumentException("transport mode is required");
-            }
+            requireNonNull(transportMode, "transport mode");
+            requireNonNull(contentCaptureMode, "content capture mode");
+            requireNonNull(reasoningCaptureMode, "reasoning capture mode");
+            requireNonNull(providerPayloadCaptureMode, "provider payload capture mode");
             if (serviceName == null || serviceName.length() > 128) {
                 throw new IllegalArgumentException("service name must contain 1 to 128 characters");
             }
-            if (contentCaptureMode == null) {
-                throw new IllegalArgumentException("content capture mode is required");
-            }
-            if (reasoningCaptureMode == null) {
-                throw new IllegalArgumentException("reasoning capture mode is required");
-            }
-            if (maxContentBytes < 256 || maxContentBytes > MAX_CONTENT_BYTES) {
+            checkRange("content byte budget", maxContentBytes, MIN_CONTENT_BYTES, LEGACY_MAX_CONTENT_BYTES);
+            checkRange("truncate preview bytes", truncatePreviewBytes, MIN_TRUNCATE_PREVIEW_BYTES, MAX_TRUNCATE_PREVIEW_BYTES);
+            checkDuration("export schedule delay", exportScheduleDelay, MIN_EXPORT_SCHEDULE_DELAY_MS, MAX_EXPORT_SCHEDULE_DELAY_MS);
+            checkRange("max queue size", maxQueueSize, MIN_MAX_QUEUE_SIZE, MAX_MAX_QUEUE_SIZE);
+            checkDuration("HITL wait timeout", hitlWaitTimeout, MIN_HITL_WAIT_TIMEOUT_MS, MAX_HITL_WAIT_TIMEOUT_MS);
+            checkDuration("shutdown timeout", shutdownTimeout, MIN_LIFECYCLE_TIMEOUT_MS, MAX_LIFECYCLE_TIMEOUT_MS);
+            checkDuration("export timeout", exportTimeout, MIN_LIFECYCLE_TIMEOUT_MS, MAX_LIFECYCLE_TIMEOUT_MS);
+            checkRange("max export batch bytes", maxExportBatchBytes, MIN_MAX_EXPORT_BATCH_BYTES, MAX_MAX_EXPORT_BATCH_BYTES);
+            checkRange("max export batch count", maxExportBatchCount, MIN_MAX_EXPORT_BATCH_COUNT, MAX_MAX_EXPORT_BATCH_COUNT);
+            checkDuration("producer linger", producerLinger, MIN_PRODUCER_LINGER_MS, MAX_PRODUCER_LINGER_MS);
+            checkRange("max invocation capture memory bytes", maxInvocationCaptureMemoryBytes, MIN_MAX_INVOCATION_CAPTURE_MEMORY_BYTES, MAX_MAX_INVOCATION_CAPTURE_MEMORY_BYTES);
+            checkRange("max capture memory bytes", maxCaptureMemoryBytes, MIN_MAX_CAPTURE_MEMORY_BYTES, MAX_MAX_CAPTURE_MEMORY_BYTES);
+            if (maxInvocationCaptureMemoryBytes > maxCaptureMemoryBytes) {
                 throw new IllegalArgumentException(
-                        "content byte budget must be between 256 and 1100000");
+                        "max invocation capture memory bytes must not exceed max capture memory bytes");
             }
-            if (exportScheduleDelay == null
-                    || exportScheduleDelay.toMillis() < MIN_EXPORT_SCHEDULE_DELAY_MS
-                    || exportScheduleDelay.toMillis() > MAX_EXPORT_SCHEDULE_DELAY_MS) {
-                throw new IllegalArgumentException(
-                        "export schedule delay must be between "
-                                + MIN_EXPORT_SCHEDULE_DELAY_MS
-                                + " and "
-                                + MAX_EXPORT_SCHEDULE_DELAY_MS
-                                + " milliseconds");
-            }
-            if (maxQueueSize < MIN_MAX_QUEUE_SIZE || maxQueueSize > MAX_MAX_QUEUE_SIZE) {
-                throw new IllegalArgumentException(
-                        "max queue size must be between "
-                                + MIN_MAX_QUEUE_SIZE
-                                + " and "
-                                + MAX_MAX_QUEUE_SIZE);
-            }
-            if (transportMode == TransportMode.CLOUD) {
-                if (endpoint == null
-                        || topicId == null
-                        || secretId == null
-                        || secretId.length == 0
-                        || secretKey == null
-                        || secretKey.length == 0) {
-                    throw new IllegalArgumentException("CLS cloud configuration is incomplete");
-                }
+            checkRange("max producer buffer bytes", maxProducerBufferBytes, MIN_MAX_PRODUCER_BUFFER_BYTES, MAX_MAX_PRODUCER_BUFFER_BYTES);
+            ReactorModeResolver.resolve(explicitReactorContextMode, legacyReactorContextHookEnabled);
+            if (transportMode == TransportMode.CLOUD
+                    && (endpoint == null
+                            || topicId == null
+                            || secretId == null
+                            || secretId.length == 0
+                            || secretKey == null
+                            || secretKey.length == 0)) {
+                throw new IllegalArgumentException("CLS cloud configuration is incomplete");
             }
             return new ClsObservabilityConfig(this);
+        }
+
+        private static void requireNonNull(Object value, String name) {
+            if (value == null) {
+                throw new IllegalArgumentException(name + " is required");
+            }
+        }
+
+        private static void checkDuration(String name, Duration value, long min, long max) {
+            if (value == null) {
+                throw new IllegalArgumentException(name + " is required");
+            }
+            checkRange(name, value.toMillis(), min, max);
+        }
+
+        private static void checkRange(String name, long value, long min, long max) {
+            if (value < min || value > max) {
+                throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
+            }
         }
     }
 }

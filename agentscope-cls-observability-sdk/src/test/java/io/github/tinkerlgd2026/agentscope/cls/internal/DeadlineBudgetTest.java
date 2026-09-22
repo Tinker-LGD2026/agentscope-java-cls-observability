@@ -37,6 +37,20 @@ class DeadlineBudgetTest {
     }
 
     @Test
+    void supportsDurationConversionOverflowAndExpiresPastWrappedDeadline() {
+        AtomicLong ticker = new AtomicLong(123L);
+        DeadlineBudget huge =
+                DeadlineBudget.start(Duration.ofSeconds(Long.MAX_VALUE), ticker::get);
+        assertThat(huge.remaining()).isEqualTo(Duration.ofNanos(Long.MAX_VALUE));
+
+        AtomicLong wrapping = new AtomicLong(Long.MAX_VALUE - 1L);
+        DeadlineBudget shortBudget =
+                DeadlineBudget.start(Duration.ofNanos(3L), wrapping::get);
+        wrapping.set(Long.MIN_VALUE + 2L);
+        assertThat(shortBudget.expired()).isTrue();
+    }
+
+    @Test
     void rejectsNullZeroAndNegativeDurations() {
         assertThatThrownBy(() -> DeadlineBudget.start(null))
                 .isInstanceOf(IllegalArgumentException.class);

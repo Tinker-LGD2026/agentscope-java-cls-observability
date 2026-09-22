@@ -3,7 +3,6 @@ package io.github.tinkerlgd2026.agentscope.cls.internal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Locale;
 import java.util.regex.Pattern;
 
 /** Bounded normalization for identifiers and other low-cardinality telemetry values. */
@@ -14,21 +13,23 @@ public final class TelemetryValueNormalizer {
     private static final int REDACTED_VALUE_BYTES =
             REDACTED_PREFIX.length() + FINGERPRINT_HEX_LENGTH;
     private static final Pattern TENCENT_SECRET_ID =
-            Pattern.compile("(?i)^AKID[A-Za-z0-9_-]{8,}$");
+            Pattern.compile("(?<![A-Za-z0-9_-])AKID[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
     private static final Pattern API_SECRET =
-            Pattern.compile("(?i)^sk-[A-Za-z0-9_-]{8,}$");
-    private static final Pattern BEARER = Pattern.compile("(?i)^Bearer\\s+\\S+$");
+            Pattern.compile("(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
+    private static final Pattern BEARER =
+            Pattern.compile("(?i)(?:authorization\\s*:\\s*)?bearer\\s+\\S+");
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private TelemetryValueNormalizer() {}
 
     public static String bounded(String value, int maxBytes) {
-        requireBudget(maxBytes, TRUNCATION_SUFFIX_BYTES + 1);
+        requireBudget(maxBytes, 1);
         String normalized = normalize(value);
         byte[] original = normalized.getBytes(StandardCharsets.UTF_8);
         if (original.length <= maxBytes) {
             return normalized;
         }
+        requireBudget(maxBytes, TRUNCATION_SUFFIX_BYTES + 1);
         return utf8Prefix(normalized, maxBytes - TRUNCATION_SUFFIX_BYTES)
                 + "~"
                 + fingerprint(original);
@@ -44,21 +45,35 @@ public final class TelemetryValueNormalizer {
     }
 
     private static boolean credentialShaped(String value) {
-        return TENCENT_SECRET_ID.matcher(value).matches()
-                || API_SECRET.matcher(value).matches()
-                || BEARER.matcher(value).matches()
-                || value.toLowerCase(Locale.ROOT).startsWith("authorization: bearer ");
+        return TENCENT_SECRET_ID.matcher(value).find()
+                || API_SECRET.matcher(value).find()
+                || BEARER.matcher(value).find();
     }
 
     private static String normalize(String value) {
         if (value == null) {
             throw new IllegalArgumentException("telemetry value is required");
         }
+        validateUtf16(value);
         String normalized = value.trim();
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("telemetry value must not be blank");
         }
         return normalized;
+    }
+
+    private static void validateUtf16(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(++index))) {
+                    throw new IllegalArgumentException("telemetry value contains malformed UTF-16");
+                }
+            } else if (Character.isLowSurrogate(current)) {
+                throw new IllegalArgumentException("telemetry value contains malformed UTF-16");
+            }
+        }
     }
 
     private static void requireBudget(int maxBytes, int minimum) {

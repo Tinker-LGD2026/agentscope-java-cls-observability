@@ -62,6 +62,34 @@ class CaptureMemoryPoolTest {
     }
 
     @Test
+    void concurrentCloseAndLongMaxCapacityRemainBounded() throws Exception {
+        CaptureMemoryPool pool = new CaptureMemoryPool(Long.MAX_VALUE);
+        CaptureMemoryPool.Reservation maximum = pool.reserve(Long.MAX_VALUE).orElseThrow();
+        assertThat(pool.usedBytes()).isEqualTo(Long.MAX_VALUE);
+        assertThat(pool.reserve(1)).isEmpty();
+
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        try {
+            List<Future<?>> closers = new ArrayList<>();
+            for (int index = 0; index < 100; index++) {
+                closers.add(executor.submit(maximum::close));
+            }
+            for (Future<?> closer : closers) {
+                closer.get();
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(pool.usedBytes()).isZero();
+        assertThat(pool.availableBytes()).isEqualTo(Long.MAX_VALUE);
+
+        CaptureMemoryPool.Reservation zero = pool.reserve(0).orElseThrow();
+        zero.close();
+        zero.close();
+        assertThat(pool.usedBytes()).isZero();
+    }
+
+    @Test
     void rejectsInvalidCapacityAndReservationSize() {
         assertThatThrownBy(() -> new CaptureMemoryPool(0))
                 .isInstanceOf(IllegalArgumentException.class);

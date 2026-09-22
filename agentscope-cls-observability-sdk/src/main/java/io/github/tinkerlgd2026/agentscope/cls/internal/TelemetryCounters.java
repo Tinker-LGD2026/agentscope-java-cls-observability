@@ -3,6 +3,7 @@ package io.github.tinkerlgd2026.agentscope.cls.internal;
 import io.github.tinkerlgd2026.agentscope.cls.ClsDetailedTelemetrySnapshot;
 import io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Thread-safe saturating observability health counters. */
 public final class TelemetryCounters {
@@ -12,8 +13,8 @@ public final class TelemetryCounters {
     private final AtomicLong exportFailedSpans = new AtomicLong();
     private final AtomicLong exportFailedBatches = new AtomicLong();
     private final AtomicLong captureFailures = new AtomicLong();
-    private final AtomicLong capacityDroppedParts = new AtomicLong();
-    private final AtomicLong capacityDroppedBytes = new AtomicLong();
+    private final AtomicReference<CapacityDrops> capacityDrops =
+            new AtomicReference<>(new CapacityDrops(0, 0));
     private final AtomicLong duplicateMiddlewareDetections = new AtomicLong();
     private final AtomicLong flushFailures = new AtomicLong();
     private final AtomicLong shutdownFailures = new AtomicLong();
@@ -46,8 +47,11 @@ public final class TelemetryCounters {
     public void capacityDropped(long parts, long bytes) {
         requireNonNegative(parts, "capacity dropped part count");
         requireNonNegative(bytes, "capacity dropped byte count");
-        add(capacityDroppedParts, parts, "capacity dropped part count");
-        add(capacityDroppedBytes, bytes, "capacity dropped byte count");
+        capacityDrops.getAndUpdate(
+                current ->
+                        new CapacityDrops(
+                                saturatingAdd(current.parts(), parts),
+                                saturatingAdd(current.bytes(), bytes)));
     }
 
     public void duplicateMiddlewareDetected(long count) {
@@ -74,6 +78,7 @@ public final class TelemetryCounters {
     public ClsDetailedTelemetrySnapshot detailedSnapshot(long activeInvocations, long waitingInvocations) {
         requireNonNegative(activeInvocations, "active invocation gauge");
         requireNonNegative(waitingInvocations, "waiting invocation gauge");
+        CapacityDrops capacity = capacityDrops.get();
         return new ClsDetailedTelemetrySnapshot(
                 acceptedSpans.get(),
                 invalidSpans.get(),
@@ -81,8 +86,8 @@ public final class TelemetryCounters {
                 exportFailedSpans.get(),
                 exportFailedBatches.get(),
                 captureFailures.get(),
-                capacityDroppedParts.get(),
-                capacityDroppedBytes.get(),
+                capacity.parts(),
+                capacity.bytes(),
                 duplicateMiddlewareDetections.get(),
                 flushFailures.get(),
                 shutdownFailures.get(),
@@ -104,4 +109,6 @@ public final class TelemetryCounters {
     private static long saturatingAdd(long left, long right) {
         return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
+
+    private record CapacityDrops(long parts, long bytes) {}
 }

@@ -22,32 +22,69 @@ class TelemetryValueNormalizerTest {
 
         assertThat(first).isEqualTo(second).matches(".*~[0-9a-f]{16}");
         assertThat(first.getBytes(StandardCharsets.UTF_8)).hasSizeLessThanOrEqualTo(48);
-        assertThat(first).doesNotContain("�");
+        assertThat(hasUnpairedSurrogate(first)).isFalse();
+        String prefix = first.substring(0, first.indexOf('~'));
+        assertThat(value).startsWith(prefix);
     }
 
     @Test
-    void redactsCredentialShapedIdentifiersEvenWhenTheyFit() {
+    void redactsCredentialShapedIdentifiersEvenWhenEmbeddedOrWhitespaceVaries() {
         assertRedacted("AKIDabcdefghijklmnop");
+        assertRedacted("tenant/AKIDabcdefghijklmnop");
         assertRedacted("sk-abcdefghijklmnop");
+        assertRedacted("credential=sk-abcdefghijklmnop");
         assertRedacted("Bearer abc.def.ghi");
+        assertRedacted("Authorization:Bearer abc.def.ghi");
+        assertRedacted("Authorization:  Bearer abc.def.ghi");
+        assertRedacted("Authorization:\tBearer abc.def.ghi");
     }
 
     @Test
-    void ordinaryIdentifiersRemainReadable() {
+    void ordinaryAndNearMissIdentifiersRemainReadable() {
         assertThat(TelemetryValueNormalizer.safeIdentifier("model-gpt-4o", 128))
                 .isEqualTo("model-gpt-4o");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("akidabcdefghijklmnop", 128))
+                .isEqualTo("akidabcdefghijklmnop");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("task-sk-short", 128))
+                .isEqualTo("task-sk-short");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("Bearer", 128))
+                .isEqualTo("Bearer");
     }
 
     @Test
-    void rejectsBlankValuesAndUnsafeBudgets() {
-        assertThatThrownBy(() -> TelemetryValueNormalizer.bounded(" ", 128))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> TelemetryValueNormalizer.bounded("value", 17))
+    void preservesLegacySmallBudgetBehaviorForValuesThatAlreadyFit() {
+        assertThat(TelemetryValueNormalizer.bounded("x", 1)).isEqualTo("x");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("x", 1)).isEqualTo("x");
+        assertThatThrownBy(() -> TelemetryValueNormalizer.bounded("value-too-long", 5))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("budget");
+    }
+
+    @Test
+    void rejectsBlankMalformedUtf16AndUnsafeCredentialBudgets() {
+        assertThatThrownBy(() -> TelemetryValueNormalizer.bounded(" ", 128))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TelemetryValueNormalizer.bounded("bad\ud83d", 128))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UTF-16");
         assertThatThrownBy(() -> TelemetryValueNormalizer.safeIdentifier("AKIDabcdefgh", 24))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("budget");
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(++index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(current)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void assertRedacted(String value) {

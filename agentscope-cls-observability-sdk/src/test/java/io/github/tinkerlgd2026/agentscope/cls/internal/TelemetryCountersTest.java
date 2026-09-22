@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.tinkerlgd2026.agentscope.cls.ClsDetailedTelemetrySnapshot;
 import io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class TelemetryCountersTest {
@@ -43,6 +45,53 @@ class TelemetryCountersTest {
         assertThat(snapshot.acceptedSpans()).isEqualTo(Long.MAX_VALUE);
         assertThat(snapshot.capacityDroppedParts()).isEqualTo(Long.MAX_VALUE);
         assertThat(snapshot.capacityDroppedBytes()).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    void capacityDropPairIsObservedAtomically() throws Exception {
+        TelemetryCounters counters = new TelemetryCounters();
+        AtomicBoolean inconsistent = new AtomicBoolean();
+        CountDownLatch start = new CountDownLatch(1);
+        Thread writer =
+                new Thread(
+                        () -> {
+                            await(start);
+                            for (int index = 0; index < 100_000; index++) {
+                                counters.capacityDropped(1, 1);
+                            }
+                        });
+        Thread reader =
+                new Thread(
+                        () -> {
+                            await(start);
+                            while (writer.isAlive()) {
+                                ClsDetailedTelemetrySnapshot snapshot =
+                                        counters.detailedSnapshot(0, 0);
+                                if (snapshot.capacityDroppedParts()
+                                        != snapshot.capacityDroppedBytes()) {
+                                    inconsistent.set(true);
+                                    return;
+                                }
+                            }
+                        });
+        writer.start();
+        reader.start();
+        start.countDown();
+        writer.join();
+        reader.join();
+
+        assertThat(inconsistent).isFalse();
+        assertThat(counters.detailedSnapshot(0, 0).capacityDroppedParts())
+                .isEqualTo(100_000);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(exception);
+        }
     }
 
     @Test

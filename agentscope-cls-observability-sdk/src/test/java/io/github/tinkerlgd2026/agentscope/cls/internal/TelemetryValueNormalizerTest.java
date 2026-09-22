@@ -32,8 +32,12 @@ class TelemetryValueNormalizerTest {
         assertRedacted("AKIDabcdefghijklmnop");
         assertRedacted("tenant/AKIDabcdefghijklmnop");
         assertRedacted("tenant-AKIDabcdefghijklmnop");
+        assertRedacted("label:AKIDabcdefghijklmnop");
+        assertRedacted("prefix AKIDabcdefghijklmnop");
+        assertRedacted("\"AKIDabcdefghijklmnop");
         assertRedacted("sk-abcdefghijklmnop");
         assertRedacted("credential=sk-abcdefghijklmnop");
+        assertRedacted("credential:sk-abcdefghijklmnop");
         assertRedacted("credential_sk-abcdefghijklmnop");
         assertRedacted("Bearer abc.def.ghi");
         assertRedacted("Authorization:Bearer abc.def.ghi");

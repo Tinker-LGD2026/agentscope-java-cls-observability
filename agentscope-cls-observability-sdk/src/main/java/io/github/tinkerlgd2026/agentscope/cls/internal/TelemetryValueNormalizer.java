@@ -13,9 +13,9 @@ public final class TelemetryValueNormalizer {
     private static final int REDACTED_VALUE_BYTES =
             REDACTED_PREFIX.length() + FINGERPRINT_HEX_LENGTH;
     private static final Pattern TENCENT_SECRET_ID =
-            Pattern.compile("(?:^|[/=_-])AKID[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
+            Pattern.compile("(?<![A-Za-z0-9])AKID[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
     private static final Pattern API_SECRET =
-            Pattern.compile("(?:^|[/=_-])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
+            Pattern.compile("(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
     private static final Pattern BEARER =
             Pattern.compile(
                     "(?i)(?<![A-Za-z0-9])(?:authorization\\s*:\\s*)?bearer\\s+\\S+");

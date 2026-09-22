@@ -28,6 +28,8 @@ final class AgentScopeMessageConverter {
     private static final int MAX_TOOL_PARTS = 8;
     private static final int MAX_NESTING_DEPTH = 16;
 
+    private final ProviderPayloadMapper providerPayloadMapper = new ProviderPayloadMapper();
+
     List<Map<String, Object>> convert(@Nullable List<Msg> messages) {
         return convertBounded(messages).messages();
     }
@@ -63,6 +65,14 @@ final class AgentScopeMessageConverter {
         return convertBounded(List.of(message)).messages().stream()
                 .findFirst()
                 .orElseGet(() -> convertMessage(message, List.of()));
+    }
+
+    Map<String, Object> providerPayload(Msg message) {
+        return providerPayloadMapper.map(message);
+    }
+
+    Map<String, Object> providerPayload(ContentBlock block) {
+        return providerPayloadMapper.map(block);
     }
 
     private static Map<String, Object> convertMessage(

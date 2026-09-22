@@ -1,11 +1,16 @@
 package io.github.tinkerlgd2026.agentscope.cls.instrumentation;
 
+import io.agentscope.core.message.AudioBlock;
 import io.agentscope.core.message.ContentBlock;
+import io.agentscope.core.message.DataBlock;
+import io.agentscope.core.message.HintBlock;
+import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.message.VideoBlock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -140,6 +145,21 @@ final class AgentScopeMessageConverter {
             result.put("id", defaultText(toolResult.getId()));
             result.put("result", convertParts(toolResult.getOutput(), limits, depth + 1));
             return Collections.unmodifiableMap(result);
+        }
+        if (block instanceof ImageBlock) {
+            return Map.of("type", "image");
+        }
+        if (block instanceof AudioBlock) {
+            return Map.of("type", "audio");
+        }
+        if (block instanceof VideoBlock) {
+            return Map.of("type", "video");
+        }
+        if (block instanceof DataBlock) {
+            return Map.of("type", "data");
+        }
+        if (block instanceof HintBlock) {
+            return Map.of("type", "hint");
         }
         return part(
                 block.getClass().getSimpleName().toLowerCase(Locale.ROOT),

@@ -56,10 +56,36 @@ class ProviderPayloadMapperTest {
         assertThat(mapped).extracting(value -> value.get("type"))
                 .containsExactly(
                         "text", "thinking", "tool_use", "tool_result", "image", "audio", "video", "data", "hint");
+        assertThat(mapped.get(0)).containsOnlyKeys("type");
+        assertThat(mapped.get(1)).containsOnlyKeys("type", "metadata");
+        assertThat(mapped.get(2)).containsOnlyKeys("type", "content", "metadata", "state");
+        assertThat(mapped.get(3)).containsOnlyKeys("type", "metadata", "state");
         assertThat(mapped.toString())
-                .contains("signature", "provider-content", "result-meta", "https://example.test/a.png", "QUJD", "AAEC");
-        assertThat(mapped.get(4)).containsKey("source");
+                .contains("signature", "provider-content", "result-meta", "https://example.test/a.png", "QUJD", "AAEC")
+                .doesNotContain("weather", "sunny");
+        Map<?, ?> imageSource = (Map<?, ?>) mapped.get(4).get("source");
+        assertThat(imageSource.get("kind")).isEqualTo("url");
+        assertThat(imageSource.containsKey("type")).isFalse();
+        Map<?, ?> audioSource = (Map<?, ?>) mapped.get(5).get("source");
+        assertThat(audioSource.get("kind")).isEqualTo("base64");
+        assertThat(audioSource.containsKey("type")).isFalse();
         assertThat(mapped.get(6)).containsEntry("fps", 24F);
+    }
+
+    @Test
+    void supportsUrlAndBase64ForEveryMediaKindAndUnknownSource() {
+        ProviderPayloadMapper mapper = new ProviderPayloadMapper();
+        List<Map<String, Object>> mapped =
+                List.of(
+                        mapper.map(new ImageBlock(new Base64Source("image/png", "IMAGE64"))),
+                        mapper.map(new AudioBlock(new URLSource("https://example.test/a.wav"))),
+                        mapper.map(VideoBlock.builder().source(new Base64Source("video/mp4", "VIDEO64")).build()),
+                        mapper.map(new ImageBlock(new io.agentscope.core.message.Source())));
+
+        assertThat(mapped.get(0).toString()).contains("kind=base64", "IMAGE64");
+        assertThat(mapped.get(1).toString()).contains("kind=url", "a.wav");
+        assertThat(mapped.get(2).toString()).contains("kind=base64", "VIDEO64");
+        assertThat(mapped.get(3).toString()).contains("unsupported=true", "kind=Source");
     }
 
     @Test
@@ -76,12 +102,33 @@ class ProviderPayloadMapperTest {
         Map<String, Object> mapped = new ProviderPayloadMapper().map(message);
 
         assertThat(mapped)
-                .containsEntry("id", "msg-1")
-                .containsEntry("name", "assistant")
-                .containsEntry("role", "assistant")
                 .containsKey("timestamp")
-                .containsKey("metadata")
-                .containsKey("content");
+                .containsKey("generate_reason")
+                .containsEntry("msg_metadata", Map.of("provider_request_id", "req-1"))
+                .doesNotContainKeys("id", "name", "role", "content", "metadata");
+    }
+
+    @Test
+    void boundsLargeMetadataAndHandlesNullValues() {
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("nullable", null);
+        for (int index = 0; index < 300; index++) {
+            metadata.put("z-key-" + index, "value-" + index);
+        }
+        Msg message =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(TextBlock.builder().text("ordinary").build())
+                        .metadata(metadata)
+                        .build();
+
+        ProviderPayloadMapper.MappingResult result =
+                new ProviderPayloadMapper().mapBounded(message);
+
+        assertThat(result.complete()).isFalse();
+        assertThat(result.payload()).containsOnlyKeys("timestamp", "generate_reason", "msg_metadata");
+        Map<?, ?> boundedMetadata = (Map<?, ?>) result.payload().get("msg_metadata");
+        assertThat(boundedMetadata).hasSizeLessThanOrEqualTo(256);
     }
 
     @Test
@@ -99,9 +146,12 @@ class ProviderPayloadMapperTest {
 
         AgentScopeMessageConverter converter = new AgentScopeMessageConverter();
         String semantic = converter.convert(List.of(message)).toString();
-        String provider = converter.providerPayload(message).toString();
+        String messageProvider = converter.providerPayload(message).toString();
+        String blockProvider =
+                converter.providerPayload(message.getContent().get(0)).toString();
 
         assertThat(semantic).contains("visible").doesNotContain("private-signature", "private-request");
-        assertThat(provider).contains("private-signature", "private-request");
+        assertThat(messageProvider).contains("private-request").doesNotContain("private-signature");
+        assertThat(blockProvider).contains("private-signature").doesNotContain("visible");
     }
 }

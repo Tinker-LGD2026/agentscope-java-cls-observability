@@ -32,8 +32,9 @@ class CanonicalPayloadCaptureTest {
                 .containsKey("original_bytes")
                 .containsKey("retained_bytes")
                 .containsKey("sha256")
-                .doesNotContainKey("value");
+                .doesNotContainKey("payload");
         assertThat(one.get("sha256")).isEqualTo(two.get("sha256"));
+        assertThat(one.get("original_bytes")).isNotEqualTo(two.get("original_bytes"));
         assertThat(one.toString()).doesNotContain("private-token-value");
     }
 
@@ -46,9 +47,9 @@ class CanonicalPayloadCaptureTest {
         Map<String, Object> truncated = capture.capture(value, ContentCaptureMode.TRUNCATE, 12, budget(256));
 
         assertThat(full).containsEntry("mode", "full").containsEntry("complete", true);
-        assertThat(full.get("value").toString()).containsSubsequence("first", "用户😀", "third");
-        assertThat(truncated).containsEntry("mode", "truncate").containsKey("value");
-        assertThat(((Number) truncated.get("retained_bytes")).longValue()).isLessThanOrEqualTo(256);
+        assertThat(full.get("payload").toString()).containsSubsequence("first", "用户😀", "third");
+        assertThat(truncated).containsEntry("mode", "truncate").containsKey("payload");
+        assertThat(((Number) truncated.get("retained_bytes")).longValue()).isLessThanOrEqualTo(12);
     }
 
     @Test
@@ -61,7 +62,7 @@ class CanonicalPayloadCaptureTest {
                 .containsEntry("mode", "off")
                 .containsEntry("complete", true)
                 .containsEntry("retained_bytes", 0L)
-                .doesNotContainKeys("value", "sha256");
+                .doesNotContainKeys("payload", "sha256");
         assertThat(envelope.toString()).doesNotContain("private");
     }
 
@@ -80,7 +81,14 @@ class CanonicalPayloadCaptureTest {
             }
         };
 
-        for (Object value : List.of(circular, tooMany, nested(17), throwing, Double.NaN)) {
+        for (Object value :
+                List.of(
+                        circular,
+                        tooMany,
+                        nested(17),
+                        throwing,
+                        Double.NaN,
+                        Double.POSITIVE_INFINITY)) {
             Map<String, Object> envelope =
                     capture.capture(value, ContentCaptureMode.HASH, 64, budget(4096));
             assertThat(envelope)
@@ -93,21 +101,110 @@ class CanonicalPayloadCaptureTest {
     }
 
     @Test
-    void nodeLimitProducesIncompleteEnvelope() {
-        List<Object> root = new ArrayList<>();
-        for (int index = 0; index < 256; index++) {
-            root.add(List.of(index, index, index, index));
-        }
-        root.add(List.of("overflow"));
+    void stripsUrlSecretsAndCompletePemBlocksBeforeFullCapture() {
+        Map<String, Object> payload =
+                Map.of(
+                        "url",
+                        "https://user:pass@example.test/path?token=private#secret-fragment",
+                        "pem",
+                        "-----BEGIN RSA PRIVATE KEY-----\nPRIVATE-BODY\n"
+                                + "-----END RSA PRIVATE KEY-----");
 
         Map<String, Object> envelope =
                 new CanonicalPayloadCapture(JSON)
-                        .capture(root, ContentCaptureMode.FULL, 64, budget(4096));
+                        .capture(payload, ContentCaptureMode.FULL, 4096, budget(4096));
+
+        assertThat(envelope.toString())
+                .contains("example.test/path", "[REDACTED]")
+                .doesNotContain("user", "pass", "token=private", "secret-fragment", "PRIVATE-BODY");
+    }
+
+    @Test
+    void oversizedTextThatNeedsRedactionFailsClosedWithoutDigestOrPayload() {
+        String oversized = "x".repeat(800_000) + " Bearer private-token-value";
+
+        Map<String, Object> envelope =
+                new CanonicalPayloadCapture(JSON)
+                        .capture(oversized, ContentCaptureMode.HASH, 64, budget(64));
 
         assertThat(envelope)
                 .containsEntry("complete", false)
+                .containsEntry("capture_error", true)
+                .containsEntry("retained_bytes", 0L)
+                .doesNotContainKeys("sha256", "payload");
+    }
+
+    @Test
+    void hashBudgetFailureNeverPublishesDigestOrExceedsBudget() {
+        Map<String, Object> envelope =
+                new CanonicalPayloadCapture(JSON)
+                        .capture(Map.of("value", "secret"), ContentCaptureMode.HASH, 64, budget(32));
+
+        assertThat(envelope)
+                .containsEntry("mode", "hash")
+                .containsEntry("complete", false)
+                .containsEntry("capture_error", true)
+                .containsEntry("retained_bytes", 0L)
                 .containsKey("original_bytes_at_least")
-                .containsKey("capture_error");
+                .doesNotContainKeys("sha256", "payload", "original_bytes");
+    }
+
+    @Test
+    void truncateUsesValidUtf8AndMeasuresSerializedPayloadBytes() throws Exception {
+        Map<String, Object> envelope =
+                new CanonicalPayloadCapture(JSON)
+                        .capture(Map.of("text", "😀😀\\\"中文"), ContentCaptureMode.TRUNCATE, 13, budget(64));
+
+        Object payload = envelope.get("payload");
+        assertThat(payload.toString()).doesNotContain("�");
+        assertThat(((Number) envelope.get("retained_bytes")).longValue())
+                .isEqualTo(JSON.writeValueAsBytes(payload).length)
+                .isLessThanOrEqualTo(13);
+    }
+
+    @Test
+    void supportsNullElementsAndExactSuccessBoundaries() {
+        CanonicalPayloadCapture capture = new CanonicalPayloadCapture(JSON);
+        List<Object> nullable = new ArrayList<>();
+        nullable.add(null);
+        nullable.add("value");
+
+        Map<String, Object> nullableEnvelope =
+                capture.capture(nullable, ContentCaptureMode.FULL, 4096, budget(4096));
+        assertThat(nullableEnvelope).containsEntry("complete", true);
+        assertThat(nullableEnvelope.get("payload").toString()).contains("null", "value");
+
+        List<Object> collectionBoundary = new ArrayList<>();
+        for (int index = 0; index < 256; index++) {
+            collectionBoundary.add(index);
+        }
+        assertThat(capture.capture(collectionBoundary, ContentCaptureMode.HASH, 64, budget(64)))
+                .containsEntry("complete", true)
+                .containsKey("sha256");
+        assertThat(capture.capture(nested(16), ContentCaptureMode.HASH, 64, budget(64)))
+                .containsEntry("complete", true);
+    }
+
+    @Test
+    void enforcesNodeLimitIndependentlyOfCollectionLimit() {
+        CanonicalPayloadCapture capture = new CanonicalPayloadCapture(JSON);
+
+        assertThat(capture.capture(nodeTree(255), ContentCaptureMode.HASH, 64, budget(64)))
+                .containsEntry("complete", true)
+                .containsKey("sha256");
+        assertThat(capture.capture(nodeTree(256), ContentCaptureMode.HASH, 64, budget(64)))
+                .containsEntry("complete", false)
+                .containsEntry("capture_error", true)
+                .containsKey("original_bytes_at_least")
+                .doesNotContainKey("sha256");
+    }
+
+    private static List<Object> nodeTree(int branches) {
+        List<Object> root = new ArrayList<>();
+        for (int index = 0; index < branches; index++) {
+            root.add(List.of(index, index, index));
+        }
+        return root;
     }
 
     private static CanonicalPayloadCapture.CaptureBudget budget(long bytes) {

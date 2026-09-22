@@ -1,7 +1,19 @@
 package io.github.tinkerlgd2026.agentscope.cls.internal.config;
 
+import io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig.TransportMode;
+import io.github.tinkerlgd2026.agentscope.cls.ReactorContextMode;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
+
 /** Central source of configuration defaults and supported ranges. */
 public final class ConfigBounds {
+    public static final TransportMode DEFAULT_TRANSPORT_MODE = TransportMode.CONSOLE;
+    public static final String DEFAULT_SERVICE_NAME = "agentscope-java-app";
+    public static final ContentCaptureMode DEFAULT_CONTENT_CAPTURE_MODE = ContentCaptureMode.OFF;
+    public static final ContentCaptureMode DEFAULT_REASONING_CAPTURE_MODE = ContentCaptureMode.OFF;
+    public static final ContentCaptureMode DEFAULT_PROVIDER_PAYLOAD_CAPTURE_MODE = ContentCaptureMode.OFF;
+    public static final ReactorContextMode DEFAULT_REACTOR_CONTEXT_MODE = ReactorContextMode.PRIVATE;
+    public static final boolean DEFAULT_HOST_TRACE_LINK_ENABLED = true;
+
     public static final int DEFAULT_MAX_CONTENT_BYTES = 950_000;
     public static final int LEGACY_MAX_CONTENT_BYTES = 1_100_000;
     public static final int MAX_CONTENT_BYTES = 1_000_000;

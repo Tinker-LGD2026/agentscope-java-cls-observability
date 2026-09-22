@@ -276,6 +276,18 @@ class ClsObservabilityConfigTest {
                         .build()
                         .reactorContextMode())
                 .isEqualTo(ReactorContextMode.PRIVATE);
+        assertThat(ClsObservabilityConfig.builder()
+                        .reactorContextMode(ReactorContextMode.LEGACY_HOOK)
+                        .reactorContextHookEnabled(true)
+                        .build()
+                        .reactorContextMode())
+                .isEqualTo(ReactorContextMode.LEGACY_HOOK);
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .reactorContextMode(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reactor context mode");
         assertThatThrownBy(
                         () ->
                                 ClsObservabilityConfig.builder()
@@ -292,6 +304,93 @@ class ClsObservabilityConfigTest {
                                                 "CLS_REACTOR_CONTEXT_HOOK", "true")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("reactor context");
+    }
+
+    @Test
+    void rejectsInvalidZeroThreeRangesAndDurationOverflow() {
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .truncatePreviewBytes(255)
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("truncate preview bytes");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .hitlWaitTimeout(Duration.ofMillis(999))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("HITL wait timeout");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .maxExportBatchBytes(2 * 1024 * 1024 - 1)
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max export batch bytes");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .maxExportBatchCount(10_001)
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max export batch count");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .producerLinger(Duration.ofMillis(99))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("producer linger");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .maxInvocationCaptureMemoryBytes(16 * 1024 * 1024L)
+                                        .maxCaptureMemoryBytes(8 * 1024 * 1024L)
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not exceed");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.builder()
+                                        .shutdownTimeout(Duration.ofSeconds(Long.MAX_VALUE))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("supported range");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.fromEnvironment(
+                                        Map.of("CLS_MAX_CAPTURE_MEMORY_BYTES", "999999999999999999999")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be an integer");
+        assertThatThrownBy(
+                        () ->
+                                ClsObservabilityConfig.fromEnvironment(
+                                        Map.of("CLS_HOST_TRACE_LINK_ENABLED", "yes")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("true or false");
+    }
+
+    @Test
+    void acceptsConfiguredBoundaryValues() {
+        ClsObservabilityConfig config =
+                ClsObservabilityConfig.builder()
+                        .truncatePreviewBytes(65_536)
+                        .hitlWaitTimeout(Duration.ofHours(24))
+                        .shutdownTimeout(Duration.ofMinutes(10))
+                        .exportTimeout(Duration.ofSeconds(1))
+                        .maxExportBatchBytes(4_718_592)
+                        .maxExportBatchCount(10_000)
+                        .producerLinger(Duration.ofSeconds(5))
+                        .maxInvocationCaptureMemoryBytes(8 * 1024 * 1024L)
+                        .maxCaptureMemoryBytes(8 * 1024 * 1024L)
+                        .maxProducerBufferBytes(1_073_741_824)
+                        .build();
+
+        assertThat(config.maxExportBatchBytes()).isEqualTo(4_718_592);
+        assertThat(config.maxExportBatchCount()).isEqualTo(10_000);
+        assertThat(config.hitlWaitTimeout()).isEqualTo(Duration.ofHours(24));
     }
 
     @Test

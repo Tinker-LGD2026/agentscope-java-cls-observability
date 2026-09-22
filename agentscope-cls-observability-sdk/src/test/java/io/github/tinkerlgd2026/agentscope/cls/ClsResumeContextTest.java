@@ -15,11 +15,19 @@ class ClsResumeContextTest {
     }
 
     @Test
-    void rejectsBlankOrOversizedTurnId() {
+    void enforcesExactUtf8BoundaryAndNullContract() {
+        String exact = "a".repeat(512);
+        assertThat(new ClsResumeContext(exact).resumeFromTurnId()).isEqualTo(exact);
+        assertThatThrownBy(() -> new ClsResumeContext(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("resumeFromTurnId");
         assertThatThrownBy(() -> new ClsResumeContext(" "))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("resumeFromTurnId");
-        assertThatThrownBy(() -> new ClsResumeContext("中".repeat(200)))
+        assertThatThrownBy(() -> new ClsResumeContext("a".repeat(513)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("512");
+        assertThatThrownBy(() -> new ClsResumeContext("中".repeat(171)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("512");
     }

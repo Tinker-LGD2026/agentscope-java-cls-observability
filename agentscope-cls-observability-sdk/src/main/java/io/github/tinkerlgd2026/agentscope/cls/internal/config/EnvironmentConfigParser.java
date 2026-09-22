@@ -37,7 +37,7 @@ public final class EnvironmentConfigParser {
         ClsObservabilityConfig.Builder builder =
                 ClsObservabilityConfig.builder()
                         .transportMode(cloud ? TransportMode.CLOUD : TransportMode.CONSOLE)
-                        .serviceName(defaultIfBlank(environment.get("CLS_SERVICE_NAME"), "agentscope-java-app"))
+                        .serviceName(defaultIfBlank(environment.get("CLS_SERVICE_NAME"), DEFAULT_SERVICE_NAME))
                         .deploymentEnvironment(clean(environment.get("CLS_DEPLOYMENT_ENVIRONMENT")))
                         .contentCaptureMode(ContentCaptureMode.parse(environment.get("CLS_CONTENT_CAPTURE")))
                         .reasoningCaptureMode(
@@ -108,7 +108,7 @@ public final class EnvironmentConfigParser {
                                 parseBoolean(
                                         environment.get("CLS_HOST_TRACE_LINK_ENABLED"),
                                         "CLS_HOST_TRACE_LINK_ENABLED",
-                                        true))
+                                        DEFAULT_HOST_TRACE_LINK_ENABLED))
                         .maxInvocationCaptureMemoryBytes(
                                 parseLong(
                                         environment.get("CLS_MAX_INVOCATION_CAPTURE_MEMORY_BYTES"),

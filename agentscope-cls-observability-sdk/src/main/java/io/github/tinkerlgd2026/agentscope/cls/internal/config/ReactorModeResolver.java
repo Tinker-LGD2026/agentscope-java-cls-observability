@@ -22,6 +22,6 @@ public final class ReactorModeResolver {
         if (explicitMode != null) {
             return explicitMode;
         }
-        return legacyMode == null ? ReactorContextMode.PRIVATE : legacyMode;
+        return legacyMode == null ? ConfigBounds.DEFAULT_REACTOR_CONTEXT_MODE : legacyMode;
     }
 }

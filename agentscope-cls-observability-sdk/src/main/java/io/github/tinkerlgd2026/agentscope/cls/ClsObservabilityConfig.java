@@ -304,17 +304,18 @@ public final class ClsObservabilityConfig {
     }
 
     public static final class Builder {
-        private TransportMode transportMode = TransportMode.CONSOLE;
+        private TransportMode transportMode = DEFAULT_TRANSPORT_MODE;
         private URI endpoint;
         private String topicId;
         private char[] secretId;
         private char[] secretKey;
         private char[] secretToken;
-        private String serviceName = "agentscope-java-app";
+        private String serviceName = DEFAULT_SERVICE_NAME;
         private String deploymentEnvironment;
-        private ContentCaptureMode contentCaptureMode = ContentCaptureMode.OFF;
-        private ContentCaptureMode reasoningCaptureMode = ContentCaptureMode.OFF;
-        private ContentCaptureMode providerPayloadCaptureMode = ContentCaptureMode.OFF;
+        private ContentCaptureMode contentCaptureMode = DEFAULT_CONTENT_CAPTURE_MODE;
+        private ContentCaptureMode reasoningCaptureMode = DEFAULT_REASONING_CAPTURE_MODE;
+        private ContentCaptureMode providerPayloadCaptureMode =
+                DEFAULT_PROVIDER_PAYLOAD_CAPTURE_MODE;
         private int maxContentBytes = DEFAULT_MAX_CONTENT_BYTES;
         private int truncatePreviewBytes = DEFAULT_TRUNCATE_PREVIEW_BYTES;
         private ReactorContextMode explicitReactorContextMode;
@@ -327,7 +328,7 @@ public final class ClsObservabilityConfig {
         private int maxExportBatchBytes = DEFAULT_MAX_EXPORT_BATCH_BYTES;
         private int maxExportBatchCount = DEFAULT_MAX_EXPORT_BATCH_COUNT;
         private Duration producerLinger = Duration.ofMillis(DEFAULT_PRODUCER_LINGER_MS);
-        private boolean hostTraceLinkEnabled = true;
+        private boolean hostTraceLinkEnabled = DEFAULT_HOST_TRACE_LINK_ENABLED;
         private long maxInvocationCaptureMemoryBytes =
                 DEFAULT_MAX_INVOCATION_CAPTURE_MEMORY_BYTES;
         private long maxCaptureMemoryBytes = DEFAULT_MAX_CAPTURE_MEMORY_BYTES;
@@ -366,7 +367,7 @@ public final class ClsObservabilityConfig {
         }
 
         public Builder serviceName(String value) {
-            serviceName = defaultIfBlank(value, "agentscope-java-app");
+            serviceName = defaultIfBlank(value, DEFAULT_SERVICE_NAME);
             return this;
         }
 
@@ -407,6 +408,9 @@ public final class ClsObservabilityConfig {
         }
 
         public Builder reactorContextMode(ReactorContextMode value) {
+            if (value == null) {
+                throw new IllegalArgumentException("reactor context mode is required");
+            }
             explicitReactorContextMode = value;
             return this;
         }
@@ -519,7 +523,13 @@ public final class ClsObservabilityConfig {
             if (value == null) {
                 throw new IllegalArgumentException(name + " is required");
             }
-            checkRange(name, value.toMillis(), min, max);
+            long millis;
+            try {
+                millis = value.toMillis();
+            } catch (ArithmeticException exception) {
+                throw new IllegalArgumentException(name + " is outside the supported range", exception);
+            }
+            checkRange(name, millis, min, max);
         }
 
         private static void checkRange(String name, long value, long min, long max) {

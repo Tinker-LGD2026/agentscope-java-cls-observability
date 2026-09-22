@@ -3,6 +3,7 @@ package io.github.tinkerlgd2026.agentscope.cls.privacy;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.util.RawValue;
 import java.beans.Introspector;
 import java.beans.PropertyDescriptor;
 import java.io.ByteArrayOutputStream;
@@ -34,6 +35,7 @@ public final class CanonicalPayloadCapture {
     private static final int MAX_COLLECTION_ITEMS = 256;
     private static final int MAX_RETAINED_BYTES = 1_572_864;
     private static final int HASH_HEX_BYTES = 64;
+    private static final int HASH_JSON_BYTES = HASH_HEX_BYTES + 2;
 
     private final ObjectMapper objectMapper;
     private final CredentialRedactor redactor = new CredentialRedactor();
@@ -68,7 +70,7 @@ public final class CanonicalPayloadCapture {
         long originalBytes = rawOutput.count();
 
         if (mode == ContentCaptureMode.HASH) {
-            if (budget.maxBytes() < HASH_HEX_BYTES) {
+            if (budget.maxBytes() < HASH_JSON_BYTES) {
                 return incomplete(envelope, originalBytes, null);
             }
             MessageDigest digest = digest();
@@ -80,7 +82,7 @@ public final class CanonicalPayloadCapture {
             envelope.put("complete", true);
             envelope.put("sha256", HexFormat.of().formatHex(digest.digest()));
             envelope.put("original_bytes", originalBytes);
-            envelope.put("retained_bytes", (long) HASH_HEX_BYTES);
+            envelope.put("retained_bytes", (long) HASH_JSON_BYTES);
             envelope.put("truncated", false);
             return immutable(envelope);
         }
@@ -104,15 +106,14 @@ public final class CanonicalPayloadCapture {
         envelope.put("complete", true);
         envelope.put("original_bytes", originalBytes);
         if (retained.count() <= retainedLimit) {
-            try {
-                Object value = objectMapper.readValue(retained.bytes(), Object.class);
-                envelope.put("payload", value);
-                envelope.put("retained_bytes", retained.count());
-                envelope.put("truncated", false);
-                return immutable(envelope);
-            } catch (IOException exception) {
+            String canonicalPayload = retained.utf8Value();
+            if (canonicalPayload == null) {
                 return incomplete(envelope, originalBytes, null);
             }
+            envelope.put("payload", new RawValue(canonicalPayload));
+            envelope.put("retained_bytes", retained.count());
+            envelope.put("truncated", false);
+            return immutable(envelope);
         }
         addPreview(envelope, retained, retainedLimit);
         envelope.put("truncated", true);
@@ -320,7 +321,8 @@ public final class CanonicalPayloadCapture {
             if (node.isNull()) {
                 generator.writeNull();
             } else if (node.isTextual()) {
-                write(generator, node.textValue(), depth, null);
+                String value = node.textValue();
+                generator.writeString(redact ? redactor.redactText(value) : value);
             } else if (node.isBoolean()) {
                 generator.writeBoolean(node.booleanValue());
             } else if (node.isNumber()) {
@@ -500,11 +502,11 @@ public final class CanonicalPayloadCapture {
 
     private static final class PrefixOutput extends CountingOutput {
         private final int limit;
-        private final ByteArrayOutputStream retained;
+        private final BoundedByteArrayOutput retained;
 
         private PrefixOutput(int limit) {
             this.limit = limit;
-            this.retained = new ByteArrayOutputStream(Math.min(limit, 8_192));
+            this.retained = new BoundedByteArrayOutput(Math.min(limit, 8_192));
         }
 
         @Override
@@ -528,12 +530,35 @@ public final class CanonicalPayloadCapture {
             return retained.toByteArray();
         }
 
+        String utf8Value() {
+            try {
+                return StandardCharsets.UTF_8
+                        .newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(retained.buffer(), 0, retained.size()))
+                        .toString();
+            } catch (CharacterCodingException exception) {
+                return null;
+            }
+        }
+
         int size() {
             return retained.size();
         }
 
         int limit() {
             return limit;
+        }
+    }
+
+    private static final class BoundedByteArrayOutput extends ByteArrayOutputStream {
+        private BoundedByteArrayOutput(int initialSize) {
+            super(initialSize);
+        }
+
+        private byte[] buffer() {
+            return buf;
         }
     }
 

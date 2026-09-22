@@ -181,10 +181,11 @@ final class ProviderPayloadMapper {
         private boolean complete = true;
 
         private boolean enter(int depth) {
-            if (depth > MAX_DEPTH || ++nodes > MAX_NODES) {
+            if (depth > MAX_DEPTH || nodes >= MAX_NODES) {
                 complete = false;
                 return false;
             }
+            nodes++;
             return true;
         }
 
@@ -195,6 +196,10 @@ final class ProviderPayloadMapper {
             if (!enter(depth)) {
                 return Map.of();
             }
+            return boundedMapEntries(source, depth);
+        }
+
+        private Map<String, Object> boundedMapEntries(Map<?, ?> source, int depth) {
             Map<String, Object> bounded = new LinkedHashMap<>();
             int count = 0;
             for (Map.Entry<?, ?> entry : source.entrySet()) {
@@ -209,11 +214,14 @@ final class ProviderPayloadMapper {
         }
 
         private Object boundedValue(Object value, int depth) {
-            if (!enter(depth) || value == null) {
-                return value;
+            if (!enter(depth)) {
+                return "[TRUNCATED]";
+            }
+            if (value == null) {
+                return null;
             }
             if (value instanceof Map<?, ?> map) {
-                return boundedMap(map, depth);
+                return boundedMapEntries(map, depth);
             }
             if (value instanceof Iterable<?> iterable) {
                 List<Object> result = new ArrayList<>();

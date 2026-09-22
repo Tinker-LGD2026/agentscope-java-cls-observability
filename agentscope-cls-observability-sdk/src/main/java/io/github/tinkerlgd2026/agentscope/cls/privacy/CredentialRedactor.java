@@ -2,6 +2,7 @@ package io.github.tinkerlgd2026.agentscope.cls.privacy;
 
 import java.net.URI;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -9,10 +10,23 @@ import java.util.regex.Pattern;
 final class CredentialRedactor {
     static final String REDACTED = "[REDACTED]";
     private static final int MAX_REDACTION_COPY_CHARACTERS = 786_432;
-    private static final Pattern SENSITIVE_KEY =
-            Pattern.compile(
-                    ".*(secret|token|password|passwd|authorization|cookie|credential|apikey|accesskey|privatekey|signature).*",
-                    Pattern.CASE_INSENSITIVE);
+    private static final Set<String> SENSITIVE_KEYS =
+            Set.of(
+                    "secret",
+                    "secretid",
+                    "secretkey",
+                    "token",
+                    "password",
+                    "passwd",
+                    "authorization",
+                    "cookie",
+                    "credential",
+                    "apikey",
+                    "accesskey",
+                    "privatekey",
+                    "signature",
+                    "thoughtsignature",
+                    "reasoningdetails");
     private static final Pattern PEM_PRIVATE_KEY =
             Pattern.compile(
                     "-----BEGIN [^-\\r\\n]{0,64}PRIVATE KEY-----.*?"
@@ -26,7 +40,7 @@ final class CredentialRedactor {
                             + "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}");
 
     boolean sensitiveKey(String key) {
-        return SENSITIVE_KEY.matcher(normalizeKey(key)).matches();
+        return SENSITIVE_KEYS.contains(normalizeKey(key));
     }
 
     String redactText(String value) {

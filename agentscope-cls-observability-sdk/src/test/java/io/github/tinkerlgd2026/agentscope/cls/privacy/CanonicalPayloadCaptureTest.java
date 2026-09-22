@@ -30,7 +30,7 @@ class CanonicalPayloadCaptureTest {
                 .containsEntry("complete", true)
                 .containsEntry("truncated", false)
                 .containsKey("original_bytes")
-                .containsKey("retained_bytes")
+                .containsEntry("retained_bytes", 66L)
                 .containsKey("sha256")
                 .doesNotContainKey("payload");
         assertThat(one.get("sha256")).isEqualTo(two.get("sha256"));
@@ -39,7 +39,7 @@ class CanonicalPayloadCaptureTest {
     }
 
     @Test
-    void fullAndTruncatePreserveListOrderAndBoundUtf8Payload() {
+    void fullAndTruncatePreserveListOrderAndBoundUtf8Payload() throws Exception {
         CanonicalPayloadCapture capture = new CanonicalPayloadCapture(JSON);
         List<Object> value = List.of("first", "用户😀", "third");
 
@@ -47,7 +47,7 @@ class CanonicalPayloadCaptureTest {
         Map<String, Object> truncated = capture.capture(value, ContentCaptureMode.TRUNCATE, 12, budget(256));
 
         assertThat(full).containsEntry("mode", "full").containsEntry("complete", true);
-        assertThat(full.get("payload").toString()).containsSubsequence("first", "用户😀", "third");
+        assertThat(payloadNode(full).toString()).containsSubsequence("first", "用户😀", "third");
         assertThat(truncated).containsEntry("mode", "truncate").containsKey("payload");
         assertThat(((Number) truncated.get("retained_bytes")).longValue()).isLessThanOrEqualTo(12);
     }
@@ -101,7 +101,7 @@ class CanonicalPayloadCaptureTest {
     }
 
     @Test
-    void stripsUrlSecretsAndCompletePemBlocksBeforeFullCapture() {
+    void stripsUrlSecretsAndCompletePemBlocksBeforeFullCapture() throws Exception {
         Map<String, Object> payload =
                 Map.of(
                         "url",
@@ -114,7 +114,7 @@ class CanonicalPayloadCaptureTest {
                 new CanonicalPayloadCapture(JSON)
                         .capture(payload, ContentCaptureMode.FULL, 4096, budget(4096));
 
-        assertThat(envelope.toString())
+        assertThat(payloadNode(envelope).toString())
                 .contains("example.test/path", "[REDACTED]")
                 .doesNotContain("user", "pass", "token=private", "secret-fragment", "PRIVATE-BODY");
     }
@@ -125,7 +125,7 @@ class CanonicalPayloadCaptureTest {
 
         Map<String, Object> envelope =
                 new CanonicalPayloadCapture(JSON)
-                        .capture(oversized, ContentCaptureMode.HASH, 64, budget(64));
+                        .capture(oversized, ContentCaptureMode.HASH, 64, budget(66));
 
         assertThat(envelope)
                 .containsEntry("complete", false)
@@ -163,7 +163,38 @@ class CanonicalPayloadCaptureTest {
     }
 
     @Test
-    void supportsNullElementsAndExactSuccessBoundaries() {
+    void rootNullIsCanonicalPayloadRatherThanOff() throws Exception {
+        Map<String, Object> envelope =
+                new CanonicalPayloadCapture(JSON)
+                        .capture(null, ContentCaptureMode.FULL, 64, budget(64));
+
+        assertThat(envelope)
+                .containsEntry("complete", true)
+                .containsEntry("original_bytes", 4L)
+                .containsEntry("retained_bytes", 4L)
+                .containsKey("payload");
+        assertThat(JSON.readTree(JSON.writeValueAsBytes(envelope)).get("payload").isNull())
+                .isTrue();
+    }
+
+    @Test
+    void ordinaryKeysDoNotTriggerCredentialRedaction() throws Exception {
+        Map<String, Object> payload =
+                Map.of(
+                        "tokenizer", "visible-one",
+                        "secretary", "visible-two",
+                        "cookiecutter", "visible-three");
+
+        Map<String, Object> envelope =
+                new CanonicalPayloadCapture(JSON)
+                        .capture(payload, ContentCaptureMode.FULL, 4096, budget(4096));
+
+        assertThat(payloadNode(envelope).toString())
+                .contains("visible-one", "visible-two", "visible-three");
+    }
+
+    @Test
+    void supportsNullElementsAndExactSuccessBoundaries() throws Exception {
         CanonicalPayloadCapture capture = new CanonicalPayloadCapture(JSON);
         List<Object> nullable = new ArrayList<>();
         nullable.add(null);
@@ -172,16 +203,16 @@ class CanonicalPayloadCaptureTest {
         Map<String, Object> nullableEnvelope =
                 capture.capture(nullable, ContentCaptureMode.FULL, 4096, budget(4096));
         assertThat(nullableEnvelope).containsEntry("complete", true);
-        assertThat(nullableEnvelope.get("payload").toString()).contains("null", "value");
+        assertThat(payloadNode(nullableEnvelope).toString()).contains("null", "value");
 
         List<Object> collectionBoundary = new ArrayList<>();
         for (int index = 0; index < 256; index++) {
             collectionBoundary.add(index);
         }
-        assertThat(capture.capture(collectionBoundary, ContentCaptureMode.HASH, 64, budget(64)))
+        assertThat(capture.capture(collectionBoundary, ContentCaptureMode.HASH, 64, budget(66)))
                 .containsEntry("complete", true)
                 .containsKey("sha256");
-        assertThat(capture.capture(nested(16), ContentCaptureMode.HASH, 64, budget(64)))
+        assertThat(capture.capture(nested(16), ContentCaptureMode.HASH, 64, budget(66)))
                 .containsEntry("complete", true);
     }
 
@@ -189,21 +220,39 @@ class CanonicalPayloadCaptureTest {
     void enforcesNodeLimitIndependentlyOfCollectionLimit() {
         CanonicalPayloadCapture capture = new CanonicalPayloadCapture(JSON);
 
-        assertThat(capture.capture(nodeTree(255), ContentCaptureMode.HASH, 64, budget(64)))
+        assertThat(capture.capture(nodeTree(2), ContentCaptureMode.HASH, 64, budget(66)))
                 .containsEntry("complete", true)
                 .containsKey("sha256");
-        assertThat(capture.capture(nodeTree(256), ContentCaptureMode.HASH, 64, budget(64)))
+        assertThat(capture.capture(nodeTree(3), ContentCaptureMode.HASH, 64, budget(66)))
                 .containsEntry("complete", false)
                 .containsEntry("capture_error", true)
                 .containsKey("original_bytes_at_least")
                 .doesNotContainKey("sha256");
+        assertThat(
+                        capture.capture(
+                                JSON.valueToTree(nodeTree(2)),
+                                ContentCaptureMode.HASH,
+                                64,
+                                budget(66)))
+                .containsEntry("complete", true)
+                .containsKey("sha256");
     }
 
-    private static List<Object> nodeTree(int branches) {
+    private static com.fasterxml.jackson.databind.JsonNode payloadNode(
+            Map<String, Object> envelope) throws Exception {
+        return JSON.readTree(JSON.writeValueAsBytes(envelope)).get("payload");
+    }
+
+    private static List<Object> nodeTree(int finalLeafCount) {
         List<Object> root = new ArrayList<>();
-        for (int index = 0; index < branches; index++) {
+        for (int index = 0; index < 255; index++) {
             root.add(List.of(index, index, index));
         }
+        List<Object> finalBranch = new ArrayList<>();
+        for (int index = 0; index < finalLeafCount; index++) {
+            finalBranch.add(index);
+        }
+        root.add(finalBranch);
         return root;
     }
 

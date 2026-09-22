@@ -132,6 +132,28 @@ class ProviderPayloadMapperTest {
     }
 
     @Test
+    void depthLimitNeverReturnsOriginalNestedContainer() {
+        Object nested = Map.of("secret", "deep-secret");
+        for (int depth = 0; depth < 20; depth++) {
+            nested = Map.of("next", nested);
+        }
+        Msg message =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(TextBlock.builder().text("ordinary").build())
+                        .metadata(Map.of("nested", nested))
+                        .build();
+
+        ProviderPayloadMapper.MappingResult result =
+                new ProviderPayloadMapper().mapBounded(message);
+
+        assertThat(result.complete()).isFalse();
+        assertThat(result.payload().toString())
+                .contains("[TRUNCATED]")
+                .doesNotContain("deep-secret");
+    }
+
+    @Test
     void ordinaryMessageConversionStillExcludesProviderMetadata() {
         Msg message =
                 Msg.builder()

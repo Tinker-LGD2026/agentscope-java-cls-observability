@@ -8,6 +8,7 @@ import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 public final class ConfigBounds {
     public static final TransportMode DEFAULT_TRANSPORT_MODE = TransportMode.CONSOLE;
     public static final String DEFAULT_SERVICE_NAME = "agentscope-java-app";
+    public static final int MAX_SERVICE_NAME_CHARACTERS = 128;
     public static final ContentCaptureMode DEFAULT_CONTENT_CAPTURE_MODE = ContentCaptureMode.OFF;
     public static final ContentCaptureMode DEFAULT_REASONING_CAPTURE_MODE = ContentCaptureMode.OFF;
     public static final ContentCaptureMode DEFAULT_PROVIDER_PAYLOAD_CAPTURE_MODE = ContentCaptureMode.OFF;

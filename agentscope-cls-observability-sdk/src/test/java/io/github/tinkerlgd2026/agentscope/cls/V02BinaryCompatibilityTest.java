@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import javax.tools.JavaCompiler;
 import javax.tools.StandardJavaFileManager;
@@ -25,6 +27,14 @@ class V02BinaryCompatibilityTest {
             Path.of(
                     "src/it/v0-2-binary/api-source/"
                             + "io/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode.java");
+
+    @Test
+    void taggedSourceSnapshotsMatchRecordedProvenance() throws Exception {
+        assertThat(sha256(V02_CONFIG_SOURCE))
+                .isEqualTo("0be61c097e0be4b523a35af2c694e4367d8ac29d8692592425d085dc95044d6e");
+        assertThat(sha256(V02_MODE_SOURCE))
+                .isEqualTo("80acc273a49b4b0ed8981ce479616ae11d8d88ae5b8e6962c8414eaae1a70279");
+    }
 
     @Test
     void compilesZeroTwoSourceClientAgainstCurrentSdk(@TempDir Path temporary) throws Exception {
@@ -56,6 +66,11 @@ class V02BinaryCompatibilityTest {
             Object result = client.getMethod("run").invoke(null);
             assertThat(result).isEqualTo(4096);
         }
+    }
+
+    private static String sha256(Path source) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        return HexFormat.of().formatHex(digest.digest(Files.readAllBytes(source)));
     }
 
     private static void compile(List<Path> sources, Path classes) throws Exception {

@@ -480,8 +480,11 @@ public final class ClsObservabilityConfig {
             requireNonNull(contentCaptureMode, "content capture mode");
             requireNonNull(reasoningCaptureMode, "reasoning capture mode");
             requireNonNull(providerPayloadCaptureMode, "provider payload capture mode");
-            if (serviceName == null || serviceName.length() > 128) {
-                throw new IllegalArgumentException("service name must contain 1 to 128 characters");
+            if (serviceName == null || serviceName.length() > MAX_SERVICE_NAME_CHARACTERS) {
+                throw new IllegalArgumentException(
+                        "service name must contain 1 to "
+                                + MAX_SERVICE_NAME_CHARACTERS
+                                + " characters");
             }
             checkRange("content byte budget", maxContentBytes, MIN_CONTENT_BYTES, LEGACY_MAX_CONTENT_BYTES);
             checkRange("truncate preview bytes", truncatePreviewBytes, MIN_TRUNCATE_PREVIEW_BYTES, MAX_TRUNCATE_PREVIEW_BYTES);

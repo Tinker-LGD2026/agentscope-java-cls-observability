@@ -36,18 +36,24 @@ public final class EnvironmentConfigParser {
 
         ClsObservabilityConfig.Builder builder =
                 ClsObservabilityConfig.builder()
-                        .transportMode(cloud ? TransportMode.CLOUD : TransportMode.CONSOLE)
+                        .transportMode(cloud ? TransportMode.CLOUD : DEFAULT_TRANSPORT_MODE)
                         .serviceName(defaultIfBlank(environment.get("CLS_SERVICE_NAME"), DEFAULT_SERVICE_NAME))
                         .deploymentEnvironment(clean(environment.get("CLS_DEPLOYMENT_ENVIRONMENT")))
-                        .contentCaptureMode(ContentCaptureMode.parse(environment.get("CLS_CONTENT_CAPTURE")))
+                        .contentCaptureMode(
+                                captureMode(
+                                        environment.get("CLS_CONTENT_CAPTURE"),
+                                        "CLS_CONTENT_CAPTURE",
+                                        DEFAULT_CONTENT_CAPTURE_MODE))
                         .reasoningCaptureMode(
-                                ContentCaptureMode.parse(
+                                captureMode(
                                         environment.get("CLS_REASONING_CAPTURE"),
-                                        "CLS_REASONING_CAPTURE"))
+                                        "CLS_REASONING_CAPTURE",
+                                        DEFAULT_REASONING_CAPTURE_MODE))
                         .providerPayloadCaptureMode(
-                                ContentCaptureMode.parse(
+                                captureMode(
                                         environment.get("CLS_PROVIDER_PAYLOAD_CAPTURE"),
-                                        "CLS_PROVIDER_PAYLOAD_CAPTURE"))
+                                        "CLS_PROVIDER_PAYLOAD_CAPTURE",
+                                        DEFAULT_PROVIDER_PAYLOAD_CAPTURE_MODE))
                         .maxContentBytes(
                                 parseInt(
                                         environment.get("CLS_MAX_CONTENT_BYTES"),
@@ -165,6 +171,11 @@ public final class EnvironmentConfigParser {
             }
         }
         return builder.build();
+    }
+
+    private static ContentCaptureMode captureMode(
+            String raw, String name, ContentCaptureMode fallback) {
+        return clean(raw) == null ? fallback : ContentCaptureMode.parse(raw, name);
     }
 
     private static ReactorContextMode parseReactorMode(String value) {

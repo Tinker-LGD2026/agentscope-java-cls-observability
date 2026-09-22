@@ -13,11 +13,12 @@ public final class TelemetryValueNormalizer {
     private static final int REDACTED_VALUE_BYTES =
             REDACTED_PREFIX.length() + FINGERPRINT_HEX_LENGTH;
     private static final Pattern TENCENT_SECRET_ID =
-            Pattern.compile("(?<![A-Za-z0-9_-])AKID[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
+            Pattern.compile("(?:^|[/=_-])AKID[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
     private static final Pattern API_SECRET =
-            Pattern.compile("(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
+            Pattern.compile("(?:^|[/=_-])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])");
     private static final Pattern BEARER =
-            Pattern.compile("(?i)(?:authorization\\s*:\\s*)?bearer\\s+\\S+");
+            Pattern.compile(
+                    "(?i)(?<![A-Za-z0-9])(?:authorization\\s*:\\s*)?bearer\\s+\\S+");
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private TelemetryValueNormalizer() {}

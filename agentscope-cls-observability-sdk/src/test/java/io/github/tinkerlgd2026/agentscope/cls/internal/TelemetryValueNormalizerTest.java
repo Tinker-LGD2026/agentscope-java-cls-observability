@@ -31,8 +31,10 @@ class TelemetryValueNormalizerTest {
     void redactsCredentialShapedIdentifiersEvenWhenEmbeddedOrWhitespaceVaries() {
         assertRedacted("AKIDabcdefghijklmnop");
         assertRedacted("tenant/AKIDabcdefghijklmnop");
+        assertRedacted("tenant-AKIDabcdefghijklmnop");
         assertRedacted("sk-abcdefghijklmnop");
         assertRedacted("credential=sk-abcdefghijklmnop");
+        assertRedacted("credential_sk-abcdefghijklmnop");
         assertRedacted("Bearer abc.def.ghi");
         assertRedacted("Authorization:Bearer abc.def.ghi");
         assertRedacted("Authorization:  Bearer abc.def.ghi");
@@ -49,6 +51,10 @@ class TelemetryValueNormalizerTest {
                 .isEqualTo("task-sk-short");
         assertThat(TelemetryValueNormalizer.safeIdentifier("Bearer", 128))
                 .isEqualTo("Bearer");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("notbearer token", 128))
+                .isEqualTo("notbearer token");
+        assertThat(TelemetryValueNormalizer.safeIdentifier("mybearer value", 128))
+                .isEqualTo("mybearer value");
     }
 
     @Test

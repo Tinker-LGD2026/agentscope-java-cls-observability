@@ -178,19 +178,35 @@ class CanonicalPayloadCaptureTest {
     }
 
     @Test
-    void ordinaryKeysDoNotTriggerCredentialRedaction() throws Exception {
+    void recognizesCompositeCredentialKeysWithoutNearMissFalsePositives() throws Exception {
         Map<String, Object> payload =
-                Map.of(
-                        "tokenizer", "visible-one",
-                        "secretary", "visible-two",
-                        "cookiecutter", "visible-three");
+                Map.ofEntries(
+                        Map.entry("client_secret", "private-1"),
+                        Map.entry("refresh_token", "private-2"),
+                        Map.entry("accessToken", "private-3"),
+                        Map.entry("x-api-key", "private-4"),
+                        Map.entry("session_cookie", "private-5"),
+                        Map.entry("authorization_header", "private-6"),
+                        Map.entry("aws_secret_access_key", "private-7"),
+                        Map.entry("tokenizer", "visible-one"),
+                        Map.entry("secretary", "visible-two"),
+                        Map.entry("cookiecutter", "visible-three"));
 
         Map<String, Object> envelope =
                 new CanonicalPayloadCapture(JSON)
                         .capture(payload, ContentCaptureMode.FULL, 4096, budget(4096));
+        String captured = payloadNode(envelope).toString();
 
-        assertThat(payloadNode(envelope).toString())
-                .contains("visible-one", "visible-two", "visible-three");
+        assertThat(captured)
+                .contains("visible-one", "visible-two", "visible-three", "[REDACTED]")
+                .doesNotContain(
+                        "private-1",
+                        "private-2",
+                        "private-3",
+                        "private-4",
+                        "private-5",
+                        "private-6",
+                        "private-7");
     }
 
     @Test

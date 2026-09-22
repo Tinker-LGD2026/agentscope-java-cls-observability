@@ -1,6 +1,7 @@
 package io.github.tinkerlgd2026.agentscope.cls.privacy;
 
 import java.net.URI;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -10,21 +11,23 @@ import java.util.regex.Pattern;
 final class CredentialRedactor {
     static final String REDACTED = "[REDACTED]";
     private static final int MAX_REDACTION_COPY_CHARACTERS = 786_432;
-    private static final Set<String> SENSITIVE_KEYS =
+    private static final Set<String> SENSITIVE_WORDS =
             Set.of(
                     "secret",
-                    "secretid",
-                    "secretkey",
                     "token",
                     "password",
                     "passwd",
                     "authorization",
                     "cookie",
                     "credential",
+                    "signature");
+    private static final Set<String> SENSITIVE_NORMALIZED_KEYS =
+            Set.of(
+                    "secretid",
+                    "secretkey",
                     "apikey",
                     "accesskey",
                     "privatekey",
-                    "signature",
                     "thoughtsignature",
                     "reasoningdetails");
     private static final Pattern PEM_PRIVATE_KEY =
@@ -40,7 +43,20 @@ final class CredentialRedactor {
                             + "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}");
 
     boolean sensitiveKey(String key) {
-        return SENSITIVE_KEYS.contains(normalizeKey(key));
+        String normalized = normalizeKey(key);
+        if (SENSITIVE_NORMALIZED_KEYS.contains(normalized)) {
+            return true;
+        }
+        List<String> words = splitKeyWords(key);
+        for (String word : words) {
+            if (SENSITIVE_WORDS.contains(word)) {
+                return true;
+            }
+        }
+        return words.contains("key")
+                && (words.contains("api")
+                        || words.contains("access")
+                        || words.contains("private"));
     }
 
     String redactText(String value) {
@@ -92,6 +108,16 @@ final class CredentialRedactor {
         } catch (Exception exception) {
             return REDACTED;
         }
+    }
+
+    private static List<String> splitKeyWords(String key) {
+        String separated =
+                key.replaceAll("([a-z0-9])([A-Z])", "$1 $2")
+                        .replaceAll("([A-Z]+)([A-Z][a-z])", "$1 $2");
+        return java.util.Arrays.stream(separated.split("[^A-Za-z0-9]+"))
+                .filter(word -> !word.isEmpty())
+                .map(word -> word.toLowerCase(Locale.ROOT))
+                .toList();
     }
 
     private static String normalizeKey(String key) {

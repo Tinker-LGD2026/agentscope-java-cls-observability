@@ -108,7 +108,18 @@ class ToolRegistryTest {
 
         assertThat(first.active()).isTrue();
         assertThat(duplicate.active()).isFalse();
+        assertThat(registry.duplicateRejectedTools()).isEqualTo(1);
         first.end(true);
         assertThat(registry.failedToolCount()).isZero();
+    }
+
+    @Test
+    void blankCallIdCountsAsMalformedNotCapacity() {
+        ToolRegistry registry = new ToolRegistry();
+
+        assertThat(registry.startTool("agent-1", "step-1", " ", "search").active()).isFalse();
+
+        assertThat(registry.malformedRejectedTools()).isEqualTo(1);
+        assertThat(registry.capacityRejectedTools()).isZero();
     }
 }

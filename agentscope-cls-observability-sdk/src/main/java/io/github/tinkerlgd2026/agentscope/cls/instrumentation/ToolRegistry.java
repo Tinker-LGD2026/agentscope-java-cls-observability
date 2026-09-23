@@ -21,6 +21,7 @@ final class ToolRegistry {
     private final AtomicLong failedTools = new AtomicLong();
     private final AtomicLong capacityRejected = new AtomicLong();
     private final AtomicLong duplicateRejected = new AtomicLong();
+    private final AtomicLong malformedRejected = new AtomicLong();
 
     ToolRegistry() {
         this(DEFAULT_MAX_TOOL_CONTEXTS, DEFAULT_MAX_TOOLS_PER_STEP);
@@ -37,7 +38,7 @@ final class ToolRegistry {
     /** Capacity checks and registration are atomic: exact bounds, never approximate. */
     synchronized ToolToken startTool(String agentId, String stepId, String callId, String name) {
         if (callId == null || callId.isBlank()) {
-            capacityRejected.incrementAndGet();
+            malformedRejected.incrementAndGet();
             return ToolToken.noop();
         }
         Set<String> stepSet =
@@ -66,6 +67,10 @@ final class ToolRegistry {
 
     long duplicateRejectedTools() {
         return duplicateRejected.get();
+    }
+
+    long malformedRejectedTools() {
+        return malformedRejected.get();
     }
 
     /** Partial failure: some tool failed while the invocation itself may still succeed. */

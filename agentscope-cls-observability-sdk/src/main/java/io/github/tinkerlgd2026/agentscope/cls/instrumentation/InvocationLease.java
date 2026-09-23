@@ -37,9 +37,7 @@ final class InvocationLease {
         return lateEvents.get();
     }
 
-    void noteLateEvent() {
-        lateEvents.incrementAndGet();
-    }    /**
+    /**
      * Rotates away from a generation that has already been terminated (for example by an
      * await timeout): installs a fresh open generation. Rotating the same terminated
      * generation twice reuses the existing replacement; rotating an open generation is a

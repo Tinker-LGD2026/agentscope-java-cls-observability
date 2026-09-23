@@ -70,6 +70,10 @@ final class InvocationState {
         entrySpan = value;
     }
 
+    void bindLease(InvocationLease newLease) {
+        lease = newLease;
+    }
+
     void bindControlPlane(
             InvocationLease newLease,
             ControlEventTracker tracker,

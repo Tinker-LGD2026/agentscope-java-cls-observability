@@ -98,6 +98,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final ReactorContextPropagation contextPropagation;
     private final MiddlewareInvocationGuard invocationGuard;
     private final HostTraceLinker hostTraceLinker;
+    private final ActiveInvocationRegistry invocationRegistry = new ActiveInvocationRegistry();
     private final java.time.Duration hitlWaitTimeout;
     private volatile java.util.concurrent.ScheduledExecutorService controlScheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -364,6 +365,27 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         }
     }
 
+    /** DRAINING: reject new root invocations; registered leases continue and may rotate. */
+    public void beginDrain() {
+        invocationRegistry.drain();
+    }
+
+    /** FREEZE: forbid rotation across all leases; late events are only counted. */
+    public void freezeInvocations() {
+        invocationRegistry.freeze();
+    }
+
+    /** Waits until all registered leases terminate or the timeout expires. */
+    public boolean awaitQuiescence(java.time.Duration timeout) {
+        return invocationRegistry.awaitQuiescence(
+                io.github.tinkerlgd2026.agentscope.cls.internal.DeadlineBudget.start(timeout));
+    }
+
+    /** Current number of active top-level invocation leases. */
+    public int activeInvocationCount() {
+        return invocationRegistry.activeLeases();
+    }
+
     @Override
     public int order() {
         return Integer.MAX_VALUE;
@@ -393,6 +415,13 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                     reactorContext,
                                     contextKeys.invocationKey(),
                                     InvocationState.class);
+                    if (inherited == null
+                            && invocationRegistry.phase()
+                                    != ActiveInvocationRegistry.Phase.RUNNING) {
+                        // DRAINING/FROZEN: business continues without new telemetry roots.
+                        counters.dropped(1);
+                        return next.apply(input);
+                    }
                     if (inherited == null && !hasIdentity(runtimeContext)) {
                         counters.dropped(1);
                         return next.apply(input);
@@ -868,6 +897,15 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             hostSnapshot = HostTraceLinker.hostSpanContext(reactorContext);
         }
         if (existing == null) {
+            InvocationLease rootLease = new InvocationLease(new InvocationLifecycle());
+            if (!invocationRegistry.registerRoot(rootLease)) {
+                // Lost the drain race between the phase check and registration.
+                counters.dropped(1);
+                return next.apply(input);
+            }
+            state.bindLease(rootLease);
+        }
+        if (existing == null) {
             entry =
                     common(
                                     hostTraceLinker.apply(
@@ -1051,6 +1089,14 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                     }
                                                 }));
         boolean publishSnapshot = existing == null;
+        if (existing == null) {
+            InvocationLease registeredLease = state.lease();
+            if (registeredLease != null) {
+                observed =
+                        observed.doFinally(
+                                signal -> invocationRegistry.unregister(registeredLease));
+            }
+        }
         return propagate(observed, spanContext)
                 .contextWrite(
                         context -> {
@@ -1441,8 +1487,14 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         if (existing != null) {
             return existing;
         }
-        InvocationLifecycle lifecycle = new InvocationLifecycle();
-        InvocationLease lease = new InvocationLease(lifecycle);
+        InvocationLease lease = state.lease();
+        InvocationLifecycle lifecycle;
+        if (lease == null) {
+            lifecycle = new InvocationLifecycle();
+            lease = new InvocationLease(lifecycle);
+        } else {
+            lifecycle = lease.current();
+        }
         InvocationCaptureBudget controlBudget =
                 new InvocationCaptureBudget(captureMemoryPool, maxInvocationCaptureMemoryBytes);
         ControlEventTracker tracker =

@@ -49,6 +49,25 @@ public final class MessageCapturePolicy {
             @Nullable List<Map<String, Object>> messages,
             boolean includeObservableHash,
             boolean sourceComplete) {
+        CapturedMessages unplanned =
+                captureUnplanned(messages, includeObservableHash, sourceComplete);
+        if (unplanned.value().isEmpty()) {
+            return unplanned;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> captured =
+                    objectMapper.convertValue(unplanned.value().orElseThrow(), List.class);
+            return new CapturedMessages(captureWithPriority(captured), unplanned.observableHash());
+        } catch (RuntimeException failure) {
+            return new CapturedMessages(Optional.empty(), Optional.empty());
+        }
+    }
+
+    public CapturedMessages captureUnplanned(
+            @Nullable List<Map<String, Object>> messages,
+            boolean includeObservableHash,
+            boolean sourceComplete) {
         List<Map<String, Object>> source = messages == null ? List.of() : messages;
         try {
             BoundedMessages bounded = boundedMessages(source);
@@ -58,7 +77,10 @@ public final class MessageCapturePolicy {
                             ? Optional.of(finalBudgetSanitizer.hash(hashBasis))
                             : Optional.empty();
             List<Map<String, Object>> captured = captureMessages(bounded.messages());
-            Optional<JsonNode> value = captureWithPriority(captured);
+            Optional<JsonNode> value =
+                    captured.isEmpty()
+                            ? Optional.empty()
+                            : Optional.of(objectMapper.valueToTree(captured));
             return new CapturedMessages(value, observableHash);
         } catch (RuntimeException | StackOverflowError failure) {
             return new CapturedMessages(Optional.empty(), Optional.empty());

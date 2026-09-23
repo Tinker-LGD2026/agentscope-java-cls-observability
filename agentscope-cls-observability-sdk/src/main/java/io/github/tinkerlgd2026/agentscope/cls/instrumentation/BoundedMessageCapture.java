@@ -16,10 +16,7 @@ import java.util.Optional;
 /** Unified bounded capture of semantic messages, reasoning, and provider payload envelopes. */
 final class BoundedMessageCapture {
     private final ObjectMapper objectMapper;
-    private final ContentCaptureMode contentMode;
-    private final ContentCaptureMode reasoningMode;
     private final ContentCaptureMode providerMode;
-    private final int finalBytes;
     private final MessageCapturePolicy semanticPolicy;
     private final CaptureBudgetPlanner planner;
 
@@ -31,13 +28,12 @@ final class BoundedMessageCapture {
             int truncatePreviewBytes,
             int finalBytes) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
-        this.contentMode = Objects.requireNonNull(contentMode, "contentMode");
-        this.reasoningMode = Objects.requireNonNull(reasoningMode, "reasoningMode");
+        Objects.requireNonNull(contentMode, "contentMode");
+        Objects.requireNonNull(reasoningMode, "reasoningMode");
         this.providerMode = Objects.requireNonNull(providerMode, "providerMode");
-        this.finalBytes = finalBytes;
         this.semanticPolicy =
                 new MessageCapturePolicy(objectMapper, contentMode, reasoningMode, finalBytes);
-        this.planner = new CaptureBudgetPlanner(objectMapper, finalBytes);
+        this.planner = new CaptureBudgetPlanner(objectMapper, finalBytes, truncatePreviewBytes);
     }
 
     Result captureMessages(
@@ -50,7 +46,7 @@ final class BoundedMessageCapture {
         try {
             List<Map<String, Object>> semanticSource = removeProvider(source);
             MessageCapturePolicy.CapturedMessages semantic =
-                    semanticPolicy.capture(semanticSource, true, sourceComplete);
+                    semanticPolicy.captureUnplanned(semanticSource, true, sourceComplete);
             List<Map<String, Object>> combined =
                     semantic.value().map(this::asMessages).orElseGet(ArrayList::new);
             if (providerMode != ContentCaptureMode.OFF) {
@@ -58,25 +54,31 @@ final class BoundedMessageCapture {
             }
             CaptureBudgetPlanner.Result planned = planner.capture(combined);
             long retained = planned.retainedBytes();
-            if (retained == 0 || invocationBudget.reserve(retained).isEmpty()) {
+            Optional<InvocationCaptureBudget.Reservation> reservation =
+                    retained == 0 ? Optional.empty() : invocationBudget.reserve(retained);
+            if (retained == 0 || reservation.isEmpty()) {
                 return new Result(
                         Optional.empty(),
                         originalBytes,
                         0,
-                        Math.max(1, planned.droppedParts() + countParts(source)),
+                        Math.max(1, countParts(source)),
                         Math.max(1, originalBytes),
-                        false,
-                        ContentCaptureMode.OFF);
+                        sourceComplete && semantic.observableHash().isPresent(),
+                        semantic.observableHash(),
+                        ContentCaptureMode.OFF,
+                        null);
             }
             ContentCaptureMode effectiveProvider = effectiveProviderMode(planned.value());
             return new Result(
                     planned.value(),
                     originalBytes,
                     retained,
-                    planned.droppedParts(),
-                    planned.droppedBytes(),
+                    Math.max(0, countParts(source) - countParts(planned.value())),
+                    Math.max(0, originalBytes - retained),
                     sourceComplete && semantic.observableHash().isPresent(),
-                    effectiveProvider);
+                    semantic.observableHash(),
+                    effectiveProvider,
+                    reservation.orElseThrow());
         } catch (RuntimeException failure) {
             return new Result(
                     Optional.empty(),
@@ -85,7 +87,9 @@ final class BoundedMessageCapture {
                     Math.max(1, countParts(source)),
                     Math.max(1, originalBytes),
                     false,
-                    ContentCaptureMode.OFF);
+                    Optional.empty(),
+                    ContentCaptureMode.OFF,
+                    null);
         }
     }
 
@@ -126,20 +130,28 @@ final class BoundedMessageCapture {
     }
 
     private ContentCaptureMode effectiveProviderMode(Optional<JsonNode> value) {
-        if (value.isEmpty()) {
+        if (value.isEmpty() || !value.orElseThrow().isArray()) {
             return ContentCaptureMode.OFF;
         }
-        String encoded = value.orElseThrow().toString();
-        if (!encoded.contains("provider_payload")) {
-            return ContentCaptureMode.OFF;
-        }
-        for (ContentCaptureMode candidate :
-                List.of(ContentCaptureMode.FULL, ContentCaptureMode.TRUNCATE, ContentCaptureMode.HASH)) {
-            if (encoded.contains("\"mode\":\"" + candidate.name().toLowerCase(java.util.Locale.ROOT) + "\"")) {
-                return candidate;
+        ContentCaptureMode effective = ContentCaptureMode.OFF;
+        for (JsonNode message : value.orElseThrow()) {
+            for (JsonNode part : message.path("parts")) {
+                if (!"provider_payload".equals(part.path("type").asText())) {
+                    continue;
+                }
+                String mode = part.path("provider_payload").path("mode").asText("off");
+                try {
+                    ContentCaptureMode current =
+                            ContentCaptureMode.valueOf(mode.toUpperCase(java.util.Locale.ROOT));
+                    if (current.ordinal() > effective.ordinal()) {
+                        effective = current;
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    return ContentCaptureMode.OFF;
+                }
             }
         }
-        return providerMode;
+        return effective;
     }
 
     private long encodedBytes(Object value) {
@@ -152,6 +164,20 @@ final class BoundedMessageCapture {
 
     private static long countParts(List<Map<String, Object>> messages) {
         return messages.stream().mapToLong(message -> parts(message.get("parts")).size()).sum();
+    }
+
+    private static long countParts(Optional<JsonNode> value) {
+        if (value.isEmpty() || !value.orElseThrow().isArray()) {
+            return 0;
+        }
+        long count = 0;
+        for (JsonNode message : value.orElseThrow()) {
+            JsonNode parts = message.get("parts");
+            if (parts != null && parts.isArray()) {
+                count += parts.size();
+            }
+        }
+        return count;
     }
 
     @SuppressWarnings("unchecked")
@@ -175,5 +201,15 @@ final class BoundedMessageCapture {
             long capacityDroppedParts,
             long capacityDroppedBytes,
             boolean hashComplete,
-            ContentCaptureMode providerMode) {}
+            Optional<String> observableHash,
+            ContentCaptureMode providerMode,
+            InvocationCaptureBudget.Reservation reservation)
+            implements AutoCloseable {
+        @Override
+        public void close() {
+            if (reservation != null) {
+                reservation.close();
+            }
+        }
+    }
 }

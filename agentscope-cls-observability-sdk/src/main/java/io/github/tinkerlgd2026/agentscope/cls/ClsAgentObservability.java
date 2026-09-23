@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter;
 import io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware;
+import io.github.tinkerlgd2026.agentscope.cls.internal.CaptureMemoryPool;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
@@ -128,7 +129,11 @@ public final class ClsAgentObservability implements AutoCloseable {
                                 config.maxContentBytes()),
                         config.contentCaptureMode(),
                         config.reasoningCaptureMode(),
+                        config.providerPayloadCaptureMode(),
+                        config.truncatePreviewBytes(),
                         config.maxContentBytes(),
+                        new CaptureMemoryPool(config.maxCaptureMemoryBytes()),
+                        config.maxInvocationCaptureMemoryBytes(),
                         active::get,
                         counters,
                         objectMapper,

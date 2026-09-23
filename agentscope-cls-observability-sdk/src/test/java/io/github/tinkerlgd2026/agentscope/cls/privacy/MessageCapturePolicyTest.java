@@ -276,7 +276,7 @@ class MessageCapturePolicyTest {
     }
 
     @Test
-    void minimalTextPrefixRespectsUtf8Boundaries() {
+    void maximalTextPrefixRespectsUtf8AndFinalJsonBudget() throws Exception {
         MessageCapturePolicy policy =
                 new MessageCapturePolicy(
                         JSON, ContentCaptureMode.FULL, ContentCaptureMode.OFF, 256);
@@ -293,7 +293,9 @@ class MessageCapturePolicyTest {
 
         String content = captured.at("/0/parts/0/content").asText();
         assertThat(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
-                .isLessThanOrEqualTo(64);
+                .isGreaterThan(64)
+                .isLessThan(256);
+        assertThat(JSON.writeValueAsBytes(captured).length).isLessThanOrEqualTo(256);
         assertThat(content).doesNotContain("\uFFFD");
         assertThat(captured.at("/0/parts/0/truncated").asBoolean()).isTrue();
     }

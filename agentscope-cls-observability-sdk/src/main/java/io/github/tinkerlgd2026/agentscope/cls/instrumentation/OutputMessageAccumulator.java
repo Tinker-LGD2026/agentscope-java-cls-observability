@@ -57,7 +57,6 @@ final class OutputMessageAccumulator {
     private long malformedEvents;
     private long capacityDroppedParts;
     private long capacityDroppedBytes;
-    private boolean capacityRejected;
     private boolean reasoningCapacityTruncated;
     private long firstReasoningDeltaNanos = -1;
     private long firstTextDeltaNanos = -1;
@@ -159,8 +158,12 @@ final class OutputMessageAccumulator {
     }
 
     private void startReasoning(BlockKey key, long elapsedNanos) {
-        if (!claim(key, PartKind.REASONING) || reasoningBlocks.containsKey(key)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.REASONING);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || reasoningBlocks.containsKey(key)) {
+            incrementMalformedEvents();
             return;
         }
         StreamPart part =
@@ -171,8 +174,13 @@ final class OutputMessageAccumulator {
     }
 
     private void reasoningDelta(BlockKey key, String delta, long elapsedNanos) {
-        if (!claim(key, PartKind.REASONING)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.REASONING);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.REASONING, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
+            incrementMalformedEvents();
             return;
         }
         StreamPart part = reasoningBlocks.get(key);
@@ -204,8 +212,12 @@ final class OutputMessageAccumulator {
     }
 
     private void startText(BlockKey key, long elapsedNanos) {
-        if (!claim(key, PartKind.TEXT) || textBlocks.containsKey(key)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.TEXT);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || textBlocks.containsKey(key)) {
+            incrementMalformedEvents();
             return;
         }
         StreamPart part =
@@ -215,8 +227,13 @@ final class OutputMessageAccumulator {
     }
 
     private void textDelta(BlockKey key, String delta, long elapsedNanos) {
-        if (!claim(key, PartKind.TEXT)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.TEXT);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.TEXT, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
+            incrementMalformedEvents();
             return;
         }
         StreamPart part = textBlocks.get(key);
@@ -246,8 +263,12 @@ final class OutputMessageAccumulator {
     }
 
     private void startTool(BlockKey key, String name) {
-        if (!claim(key, PartKind.TOOL) || toolCalls.containsKey(key)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.TOOL);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || toolCalls.containsKey(key)) {
+            incrementMalformedEvents();
             return;
         }
         ToolPart part = new ToolPart(key.blockId(), name, toolPayloadBudget);
@@ -256,8 +277,13 @@ final class OutputMessageAccumulator {
     }
 
     private void toolDelta(BlockKey key, String name, String delta) {
-        if (!claim(key, PartKind.TOOL)) {
-            recordClaimRejection();
+        ClaimResult claim = claim(key, PartKind.TOOL);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.TOOL, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
+            incrementMalformedEvents();
             return;
         }
         ToolPart part = toolCalls.get(key);
@@ -283,13 +309,12 @@ final class OutputMessageAccumulator {
         part.close();
     }
 
-    private boolean claim(BlockKey key, PartKind kind) {
+    private ClaimResult claim(BlockKey key, PartKind kind) {
         PartKind existing = lifecycleTypes.get(key);
         if (existing != null) {
-            return existing == kind;
+            return existing == kind ? ClaimResult.EXISTING : ClaimResult.CONFLICT;
         }
         if (lifecycleTypes.size() >= MAX_PARTS || partCount(kind) >= partLimit(kind)) {
-            capacityRejected = true;
             capacityDroppedParts = saturatingAdd(capacityDroppedParts, 1L);
             capacityDroppedBytes =
                     saturatingAdd(
@@ -299,17 +324,19 @@ final class OutputMessageAccumulator {
             if (kind == PartKind.REASONING) {
                 reasoningCapacityTruncated = true;
             }
-            return false;
+            return ClaimResult.REJECTED;
         }
         lifecycleTypes.put(key, kind);
-        return true;
+        return ClaimResult.NEW;
     }
 
-    private void recordClaimRejection() {
-        if (capacityRejected) {
-            capacityRejected = false;
-        } else {
-            incrementMalformedEvents();
+    private void recordDroppedPayload(PartKind kind, String delta) {
+        capacityDroppedBytes =
+                saturatingAdd(
+                        capacityDroppedBytes,
+                        delta == null ? 0 : delta.getBytes(StandardCharsets.UTF_8).length);
+        if (kind == PartKind.REASONING) {
+            reasoningCapacityTruncated = true;
         }
     }
 
@@ -799,6 +826,13 @@ final class OutputMessageAccumulator {
         REASONING,
         TEXT,
         TOOL
+    }
+
+    private enum ClaimResult {
+        NEW,
+        EXISTING,
+        CONFLICT,
+        REJECTED
     }
 
     private record BlockKey(String replyId, String blockId) {}

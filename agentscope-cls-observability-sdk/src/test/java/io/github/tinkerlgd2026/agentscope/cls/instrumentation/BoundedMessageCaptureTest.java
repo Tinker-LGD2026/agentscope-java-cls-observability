@@ -101,8 +101,8 @@ class BoundedMessageCaptureTest {
 
     @Test
     void reservationFailureReturnsSafeEmptyResultAndCapacityMetrics() {
-        CaptureMemoryPool pool = new CaptureMemoryPool(128);
-        try (InvocationCaptureBudget invocation = new InvocationCaptureBudget(pool, 128)) {
+        CaptureMemoryPool pool = new CaptureMemoryPool(64);
+        try (InvocationCaptureBudget invocation = new InvocationCaptureBudget(pool, 64)) {
             BoundedMessageCapture.Result result =
                     new BoundedMessageCapture(
                                     JSON,

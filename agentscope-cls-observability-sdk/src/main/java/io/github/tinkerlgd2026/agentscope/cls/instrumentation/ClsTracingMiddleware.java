@@ -1,5 +1,6 @@
 package io.github.tinkerlgd2026.agentscope.cls.instrumentation;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -21,9 +22,11 @@ import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.middleware.ModelCallInput;
 import io.agentscope.core.middleware.ReasoningInput;
 import io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext;
+import io.github.tinkerlgd2026.agentscope.cls.internal.CaptureMemoryPool;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
+import io.github.tinkerlgd2026.agentscope.cls.privacy.CanonicalPayloadCapture;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
@@ -86,7 +89,13 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final MessageCapturePolicy messageCapturePolicy;
     private final ContentCaptureMode contentCaptureMode;
     private final ContentCaptureMode reasoningCaptureMode;
+    private final ContentCaptureMode providerPayloadCaptureMode;
     private final int maxContentBytes;
+    private final int truncatePreviewBytes;
+    private final long maxInvocationCaptureMemoryBytes;
+    private final CaptureMemoryPool captureMemoryPool;
+    private final BoundedMessageCapture boundedMessageCapture;
+    private final CanonicalPayloadCapture canonicalPayloadCapture;
     private final ObjectMapper objectMapper;
     private final ObjectWriter canonicalWriter;
     private final AgentScopeMessageConverter messageConverter;
@@ -158,11 +167,45 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             TelemetryCounters counters,
             ObjectMapper objectMapper,
             boolean reactorContextHookEnabled) {
+        this(
+                tracer,
+                contentSanitizer,
+                messageCapturePolicy,
+                contentCaptureMode,
+                reasoningCaptureMode,
+                ContentCaptureMode.OFF,
+                Math.min(4096, maxContentBytes),
+                maxContentBytes,
+                new CaptureMemoryPool(Math.max(maxContentBytes, 8L * 1024 * 1024)),
+                maxContentBytes,
+                active,
+                counters,
+                objectMapper,
+                reactorContextHookEnabled);
+    }
+
+    public ClsTracingMiddleware(
+            Tracer tracer,
+            ContentSanitizer contentSanitizer,
+            MessageCapturePolicy messageCapturePolicy,
+            ContentCaptureMode contentCaptureMode,
+            ContentCaptureMode reasoningCaptureMode,
+            ContentCaptureMode providerPayloadCaptureMode,
+            int truncatePreviewBytes,
+            int maxContentBytes,
+            CaptureMemoryPool captureMemoryPool,
+            long maxInvocationCaptureMemoryBytes,
+            BooleanSupplier active,
+            TelemetryCounters counters,
+            ObjectMapper objectMapper,
+            boolean reactorContextHookEnabled) {
         if (tracer == null
                 || contentSanitizer == null
                 || messageCapturePolicy == null
                 || contentCaptureMode == null
                 || reasoningCaptureMode == null
+                || providerPayloadCaptureMode == null
+                || captureMemoryPool == null
                 || active == null
                 || counters == null
                 || objectMapper == null) {
@@ -173,7 +216,20 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         this.messageCapturePolicy = messageCapturePolicy;
         this.contentCaptureMode = contentCaptureMode;
         this.reasoningCaptureMode = reasoningCaptureMode;
+        this.providerPayloadCaptureMode = providerPayloadCaptureMode;
         this.maxContentBytes = maxContentBytes;
+        this.truncatePreviewBytes = truncatePreviewBytes;
+        this.captureMemoryPool = captureMemoryPool;
+        this.maxInvocationCaptureMemoryBytes = maxInvocationCaptureMemoryBytes;
+        this.boundedMessageCapture =
+                new BoundedMessageCapture(
+                        objectMapper,
+                        contentCaptureMode,
+                        reasoningCaptureMode,
+                        providerPayloadCaptureMode,
+                        truncatePreviewBytes,
+                        maxContentBytes);
+        this.canonicalPayloadCapture = new CanonicalPayloadCapture(objectMapper);
         this.objectMapper = objectMapper;
         this.active = active;
         this.counters = counters;
@@ -416,18 +472,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             span.setAttribute("gen_ai.react.round", (long) step.round());
         }
         try {
-            AgentScopeMessageConverter.ConversionResult converted =
-                    messageConverter.convertBounded(input.messages());
-            MessageCapturePolicy.CapturedMessages captured =
-                    messageCapturePolicy.capture(
-                            converted.messages(), true, converted.complete());
-            captured.observableHash()
-                    .ifPresent(hash -> span.setAttribute("gen_ai.input.messages.hash", hash));
-            captured.value()
-                    .ifPresent(
-                            node ->
-                                    span.setAttribute(
-                                            "gen_ai.input.messages", node.toString()));
+            captureMessages(
+                    input.messages(), true, "gen_ai.input.messages", span);
         } catch (RuntimeException | StackOverflowError failure) {
             telemetryFailed(failure);
             span.setAttribute(
@@ -654,21 +700,17 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         .startSpan();
         Span inputEntry = entry;
         try {
-            AgentScopeMessageConverter.ConversionResult converted =
-                    messageConverter.convertBounded(agentMessages);
-            MessageCapturePolicy.CapturedMessages captured =
-                    messageCapturePolicy.capture(
-                            converted.messages(), false, converted.complete());
-            captured.value()
-                    .ifPresent(
-                            node -> {
-                                agentSpan.setAttribute(
-                                        "gen_ai.input.messages", node.toString());
-                                if (inputEntry != null) {
-                                    inputEntry.setAttribute(
-                                            "gen_ai.input.messages", node.toString());
-                                }
-                            });
+            if (inputEntry == null) {
+                captureMessages(
+                        agentMessages, false, "gen_ai.input.messages", agentSpan);
+            } else {
+                captureMessages(
+                        agentMessages,
+                        false,
+                        "gen_ai.input.messages",
+                        agentSpan,
+                        inputEntry);
+            }
         } catch (RuntimeException | StackOverflowError failure) {
             telemetryFailed(failure);
             agentSpan.setAttribute(
@@ -748,22 +790,135 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         context -> context.put(INVOCATION_KEY, state).put(AGENT_KEY, agentFrame));
     }
 
+    private void captureMessages(
+            @Nullable List<io.agentscope.core.message.Msg> source,
+            boolean includeObservableHash,
+            String attribute,
+            Span... spans) {
+        List<io.agentscope.core.message.Msg> messages = source == null ? List.of() : source;
+        AgentScopeMessageConverter.ConversionResult converted =
+                messageConverter.convertBounded(messages);
+        List<Map<String, Object>> combined = new ArrayList<>(converted.messages());
+        combined.addAll(providerMessages(messages));
+        try (InvocationCaptureBudget budget =
+                        new InvocationCaptureBudget(
+                                captureMemoryPool, maxInvocationCaptureMemoryBytes);
+                BoundedMessageCapture.Result captured =
+                        boundedMessageCapture.captureMessages(
+                                combined, converted.complete(), budget)) {
+            String encoded = captured.value().map(JsonNode::toString).orElse(null);
+            for (Span target : spans) {
+                if (encoded != null) {
+                    target.setAttribute(attribute, encoded);
+                }
+                if (includeObservableHash) {
+                    captured.observableHash()
+                            .ifPresent(hash -> target.setAttribute(attribute + ".hash", hash));
+                    target.setAttribute(
+                            "agentscope.capture.hash_complete", captured.hashComplete());
+                }
+                target.setAttribute(
+                        "agentscope.capture.original_bytes", captured.originalBytes());
+                target.setAttribute(
+                        "agentscope.capture.retained_bytes", captured.retainedBytes());
+                target.setAttribute(
+                        "agentscope.capture.truncated",
+                        captured.capacityDroppedParts() > 0
+                                || captured.retainedBytes() < captured.originalBytes());
+                target.setAttribute(
+                        "agentscope.provider_payload.capture_mode",
+                        captured.providerMode().name().toLowerCase(Locale.ROOT));
+                if (captured.capacityDroppedParts() > 0
+                        || captured.capacityDroppedBytes() > 0) {
+                    target.setAttribute(
+                            "agentscope.capture.capacity_dropped_parts",
+                            captured.capacityDroppedParts());
+                    target.setAttribute(
+                            "agentscope.capture.capacity_dropped_bytes",
+                            captured.capacityDroppedBytes());
+                }
+            }
+            if (captured.capacityDroppedParts() > 0 || captured.capacityDroppedBytes() > 0) {
+                counters.capacityDropped(
+                        captured.capacityDroppedParts(), captured.capacityDroppedBytes());
+            }
+            if (!combined.isEmpty() && captured.value().isEmpty()) {
+                counters.captureFailed(1);
+            }
+        }
+    }
+
+    private List<Map<String, Object>> providerMessages(
+            List<io.agentscope.core.message.Msg> messages) {
+        if (providerPayloadCaptureMode == ContentCaptureMode.OFF || messages.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        int first = Math.max(0, messages.size() - 32);
+        for (int index = first; index < messages.size(); index++) {
+            io.agentscope.core.message.Msg message = messages.get(index);
+            if (message == null) {
+                continue;
+            }
+            List<Map<String, Object>> parts = new ArrayList<>();
+            addProviderPart(parts, messageConverter.providerPayload(message));
+            if (message.getContent() != null) {
+                for (io.agentscope.core.message.ContentBlock block : message.getContent()) {
+                    if (block != null) {
+                        Map<String, Object> payload = messageConverter.providerPayload(block);
+                        if (payload.size() > 1 || !payload.containsKey("type")) {
+                            addProviderPart(parts, payload);
+                        }
+                    }
+                }
+            }
+            if (!parts.isEmpty()) {
+                String role =
+                        message.getRole() == null
+                                ? "unknown"
+                                : message.getRole().name().toLowerCase(Locale.ROOT);
+                result.add(Map.of("role", role, "parts", List.copyOf(parts)));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private void addProviderPart(
+            List<Map<String, Object>> parts, Map<String, Object> payload) {
+        if (payload.isEmpty()) {
+            return;
+        }
+        Map<String, Object> envelope =
+                canonicalPayloadCapture.capture(
+                        payload,
+                        providerPayloadCaptureMode,
+                        truncatePreviewBytes,
+                        CanonicalPayloadCapture.CaptureBudget.fixed(
+                                Math.min(1_572_864L, maxContentBytes)));
+        parts.add(
+                Map.of(
+                        "type", "provider_payload",
+                        "provider_payload", envelope));
+    }
+
     private void captureAgentResult(Span agentSpan, @Nullable Span entry, AgentEvent event) {
         if (!(event instanceof AgentResultEvent result)) {
             return;
         }
-        AgentScopeMessageConverter.ConversionResult converted =
-                messageConverter.convertBounded(List.of(result.getResult()));
-        messageCapturePolicy
-                .capture(converted.messages(), false, converted.complete())
-                .value()
-                .ifPresent(
-                        node -> {
-                            agentSpan.setAttribute("gen_ai.output.messages", node.toString());
-                            if (entry != null) {
-                                entry.setAttribute("gen_ai.output.messages", node.toString());
-                            }
-                        });
+        if (entry == null) {
+            captureMessages(
+                    List.of(result.getResult()),
+                    false,
+                    "gen_ai.output.messages",
+                    agentSpan);
+        } else {
+            captureMessages(
+                    List.of(result.getResult()),
+                    false,
+                    "gen_ai.output.messages",
+                    agentSpan,
+                    entry);
+        }
     }
 
     private <I> Flux<AgentEvent> guarded(

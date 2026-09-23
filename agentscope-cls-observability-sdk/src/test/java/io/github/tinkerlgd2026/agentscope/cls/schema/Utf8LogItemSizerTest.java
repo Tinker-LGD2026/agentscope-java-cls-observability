@@ -39,6 +39,10 @@ class Utf8LogItemSizerTest {
         fields.put("name", "chat 模型 😀");
         fields.put("attribute", "{\"key\":\"值\"}".repeat(10));
         fields.put("statusMessage", "");
+        fields.put("asciiOnly", "plain-ascii-value");
+        fields.put("chineseOnly", "中文键值对".repeat(64));
+        fields.put("emojiOnly", "😀".repeat(128));
+        fields.put("mixedBoundary", "a中😀".repeat(100));
 
         LogItem item = new LogItem();
         for (Map.Entry<String, String> entry : fields.entrySet()) {

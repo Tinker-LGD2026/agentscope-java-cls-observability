@@ -457,6 +457,34 @@ class ClsSpanEncoderTest {
         assertThat(result.rejection()).contains("record");
     }
 
+    @Test
+    void rejectsNullNonCroppableFieldsDeterministically() {
+        ClsSpanRecord nullName =
+                new ClsSpanRecord(
+                        "0123456789abcdef0123456789abcdef",
+                        "0123456789abcdef",
+                        "",
+                        null,
+                        "client",
+                        "100",
+                        "200",
+                        "100",
+                        "OK",
+                        "",
+                        VALID_MINIMAL_ATTRIBUTES,
+                        "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                        "",
+                        "[]",
+                        "[]");
+
+        BoundedFieldEncoder.Result result =
+                new BoundedFieldEncoder(JSON, ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES)
+                        .encode(nullName);
+
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.rejection()).contains("name");
+    }
+
     private static final String VALID_MINIMAL_ATTRIBUTES =
             "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
                     + "\"gen_ai.agent.type\":\"agentscope-java\","

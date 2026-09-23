@@ -18,8 +18,8 @@ public final class BoundedFieldEncoder {
     private static final Pattern SPAN_ID = Pattern.compile("[0-9a-f]{16}");
     private static final Pattern NON_NEGATIVE_LONG = Pattern.compile("[0-9]+");
     private static final String ENVELOPE_PREFIX = "{\"truncated\":true,\"original_bytes\":";
-    // {"truncated":true,"original_bytes":<N>,"sha256":"<64 hex>","preview":""} with a
-    // 20-digit upper bound for N: 38 + 20 + 12 + 64 + 13 + 2.
+    // {"truncated":true,"original_bytes":<N>,"sha256":"<64 hex>","preview":""} with N
+    // bounded by 20 digits: 35 + 20 + 11 + 64 + 13 + 2 = 145; rounded up conservatively.
     private static final int ENVELOPE_OVERHEAD_BYTES = 149;
 
     private final int attributeMaxBytes;
@@ -59,6 +59,9 @@ public final class BoundedFieldEncoder {
                 cropPlain(
                         record.traceState() == null ? "" : record.traceState(),
                         ClsFieldLimits.TRACE_STATE_MAX_BYTES);
+        if (record.resource() == null) {
+            return Result.rejected("resource is required");
+        }
         String resource = cropJson(record.resource(), ClsFieldLimits.RESOURCE_MAX_BYTES);
         if (resource == null) {
             return Result.rejected("resource cannot fit its field limit");
@@ -72,6 +75,9 @@ public final class BoundedFieldEncoder {
             return Result.rejected("logs cannot fit its field limit");
         }
 
+        if (record.attribute() == null) {
+            return Result.rejected("attribute is required");
+        }
         String attribute = cropJson(record.attribute(), attributeMaxBytes);
         if (attribute == null) {
             return Result.rejected("attribute cannot fit its field limit");
@@ -143,6 +149,9 @@ public final class BoundedFieldEncoder {
                         && !SPAN_ID.matcher(record.parentSpanID()).matches())) {
             return "parentSpanID must be empty or a 16 character lowercase hex value";
         }
+        if (record.name() == null || record.name().isBlank()) {
+            return "name is required";
+        }
         if (record.kind() == null || record.kind().isBlank()) {
             return "kind is required";
         }
@@ -156,9 +165,15 @@ public final class BoundedFieldEncoder {
     }
 
     private static boolean validTime(String value) {
-        return value != null
-                && value.length() <= 20
-                && NON_NEGATIVE_LONG.matcher(value).matches();
+        if (value == null || !NON_NEGATIVE_LONG.matcher(value).matches()) {
+            return false;
+        }
+        try {
+            Long.parseLong(value);
+            return true;
+        } catch (NumberFormatException exception) {
+            return false;
+        }
     }
 
     private static String cropPlain(String value, int maxBytes) {

@@ -105,6 +105,11 @@ public final class ClsSpanValidator {
         this.messageValidator = messageValidator;
     }
 
+    /**
+     * Validates a fully materialized record. Note: a well-formed truncated field envelope is
+     * trusted as produced by {@link BoundedFieldEncoder}; callers must not pass untrusted
+     * pre-cropping content through this overload to bypass content validation.
+     */
     public List<String> validate(ClsSpanRecord record) {
         if (record == null) {
             return List.of("record is required");
@@ -310,12 +315,12 @@ public final class ClsSpanValidator {
         if (value == null || value.isArray()) {
             return value;
         }
-        if (value.isObject() && truncatedEnvelope(errors, field, value)) {
-            return value;
+        if (value.isObject()
+                && value.path("truncated").isBoolean()
+                && value.path("truncated").asBoolean()) {
+            return truncatedEnvelope(errors, field, value) ? value : null;
         }
-        if (!value.isObject()) {
-            errors.add(field + " must encode a JSON array");
-        }
+        errors.add(field + " must encode a JSON array");
         return null;
     }
 
@@ -323,15 +328,6 @@ public final class ClsSpanValidator {
         JsonNode value = parseJson(errors, field, json);
         if (value != null && !value.isObject()) {
             errors.add(field + " must encode a JSON object");
-            return null;
-        }
-        return value;
-    }
-
-    private JsonNode parseArray(List<String> errors, String field, String json) {
-        JsonNode value = parseJson(errors, field, json);
-        if (value != null && !value.isArray()) {
-            errors.add(field + " must encode a JSON array");
             return null;
         }
         return value;

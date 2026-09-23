@@ -241,6 +241,47 @@ class ClsSpanValidatorTest {
                 .contains("attribute is not a valid truncated field envelope");
     }
 
+    @Test
+    void rejectsPlainObjectsForLinksAndLogs() {
+        ClsSpanRecord record =
+                new ClsSpanRecord(
+                        "0123456789abcdef0123456789abcdef",
+                        "0123456789abcdef",
+                        "",
+                        "chat model-x",
+                        "client",
+                        "100",
+                        "200",
+                        "100",
+                        "OK",
+                        "",
+                        VALID_ATTRIBUTES,
+                        "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                        "",
+                        "{\"x\":1}",
+                        "{\"y\":2}");
+
+        assertThat(validator().validate(record))
+                .contains(
+                        "links must encode a JSON array",
+                        "logs must encode a JSON array");
+    }
+
+    @Test
+    void rejectsPlaintextPayloadInHashModeEnvelope() {
+        String attributes =
+                withMessages(
+                        "\"gen_ai.output.messages\":[{\"role\":\"assistant\",\"parts\":["
+                                + "{\"type\":\"provider_payload\",\"provider_payload\":{"
+                                + "\"mode\":\"hash\",\"complete\":true,\"sha256\":\""
+                                + "a".repeat(64)
+                                + "\",\"original_bytes\":5,\"payload\":\"secret-plaintext\"}}]}]");
+
+        assertThat(validator().validate(record(attributes)))
+                .contains(
+                        "attribute.gen_ai.output.messages provider_payload hash mode must not contain a plaintext payload");
+    }
+
     private static String withMessages(String keyAndValue) {
         return VALID_ATTRIBUTES.substring(0, VALID_ATTRIBUTES.length() - 1)
                 + ","

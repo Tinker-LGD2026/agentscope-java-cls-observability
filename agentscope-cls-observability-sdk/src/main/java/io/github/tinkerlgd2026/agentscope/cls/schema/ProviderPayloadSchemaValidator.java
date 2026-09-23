@@ -40,6 +40,11 @@ public final class ProviderPayloadSchemaValidator {
                 }
             }
             case "hash" -> {
+                if (envelope.has("payload")) {
+                    errors.add(
+                            prefix
+                                    + " provider_payload hash mode must not contain a plaintext payload");
+                }
                 JsonNode sha256 = envelope.get("sha256");
                 if (sha256 == null
                         || !sha256.isTextual()
@@ -69,22 +74,27 @@ public final class ProviderPayloadSchemaValidator {
 
     private static void requireByteCount(
             List<String> errors, JsonNode envelope, String prefix, String key) {
+        String effectiveKey = key;
         JsonNode value = envelope.get(key);
         if (value == null) {
             if ("original_bytes".equals(key) && envelope.has("original_bytes_at_least")) {
-                value = envelope.get("original_bytes_at_least");
+                effectiveKey = "original_bytes_at_least";
+                value = envelope.get(effectiveKey);
             } else {
                 errors.add(prefix + " provider_payload." + key + " must be an integer");
                 return;
             }
         }
         if (!value.isIntegralNumber()) {
-            errors.add(prefix + " provider_payload." + key + " must be an integer");
+            errors.add(prefix + " provider_payload." + effectiveKey + " must be an integer");
         } else if (!value.canConvertToLong()) {
             errors.add(
-                    prefix + " provider_payload." + key + " must fit a signed 64-bit integer");
+                    prefix
+                            + " provider_payload."
+                            + effectiveKey
+                            + " must fit a signed 64-bit integer");
         } else if (value.longValue() < 0) {
-            errors.add(prefix + " provider_payload." + key + " must be non-negative");
+            errors.add(prefix + " provider_payload." + effectiveKey + " must be non-negative");
         }
     }
 }

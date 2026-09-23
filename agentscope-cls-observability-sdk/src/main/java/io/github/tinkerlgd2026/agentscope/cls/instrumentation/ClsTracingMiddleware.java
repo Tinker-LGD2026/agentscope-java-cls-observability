@@ -864,10 +864,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         // value when an outer middleware (or another CLS instance) already stored it.
         SpanContext hostSnapshot =
                 existing == null ? HostTraceLinker.readSnapshot(reactorContext) : null;
-        boolean snapshotCaptured = false;
         if (existing == null && hostSnapshot == null) {
             hostSnapshot = HostTraceLinker.hostSpanContext(reactorContext);
-            snapshotCaptured = true;
         }
         if (existing == null) {
             entry =
@@ -1052,23 +1050,18 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                                 true);
                                                     }
                                                 }));
-        boolean publishSnapshot = snapshotCaptured;
-        SpanContext snapshotToPublish = hostSnapshot;
+        boolean publishSnapshot = existing == null;
         return propagate(observed, spanContext)
                 .contextWrite(
                         context -> {
                             reactor.util.context.Context updated =
                                     context.put(contextKeys.invocationKey(), state)
                                             .put(contextKeys.agentKey(), agentFrame);
-                            if (publishSnapshot) {
-                                updated =
-                                        updated.put(
-                                                HostTraceLinker.HOST_CONTEXT_SNAPSHOT_KEY,
-                                                snapshotToPublish == null
-                                                        ? SpanContext.getInvalid()
-                                                        : snapshotToPublish);
-                            }
-                            return updated;
+                            // writeSnapshot is write-once and stores the invalid sentinel when
+                            // no host is present, so it never holds a CLS span.
+                            return publishSnapshot
+                                    ? HostTraceLinker.writeSnapshot(updated, reactorContext)
+                                    : updated;
                         });
     }
 

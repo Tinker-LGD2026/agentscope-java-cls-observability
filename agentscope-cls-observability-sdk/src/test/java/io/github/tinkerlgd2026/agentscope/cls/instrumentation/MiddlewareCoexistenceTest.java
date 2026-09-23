@@ -61,11 +61,56 @@ class MiddlewareCoexistenceTest {
         assertThat(entry.getLinks()).hasSize(1);
         assertThat(entry.getLinks().get(0).getSpanContext().getTraceId())
                 .isEqualTo(host.getSpanContext().getTraceId());
+        assertThat(entry.getLinks().get(0).getSpanContext().getSpanId())
+                .isEqualTo(host.getSpanContext().getSpanId());
         assertThat(entry.getTraceId()).isNotEqualTo(host.getSpanContext().getTraceId());
         assertThat(entry.getParentSpanContext().isValid()).isFalse();
 
         middleware.close();
         clsProvider.close();
+        hostProvider.close();
+    }
+
+    @Test
+    void secondClsInstanceLinksTheSameHostSnapshot() {
+        InMemorySpanExporter exporterA = InMemorySpanExporter.create();
+        InMemorySpanExporter exporterB = InMemorySpanExporter.create();
+        SdkTracerProvider providerA = provider(exporterA);
+        SdkTracerProvider providerB = provider(exporterB);
+        SdkTracerProvider hostProvider = provider(InMemorySpanExporter.create());
+        ClsTracingMiddleware instanceA = middleware(providerA, new TelemetryCounters());
+        ClsTracingMiddleware instanceB = middleware(providerB, new TelemetryCounters());
+        Agent agent = agent("assistant", "agent-1");
+
+        Span host = hostProvider.get("host").spanBuilder("host-entry").startSpan();
+        try (Scope ignored = host.makeCurrent()) {
+            run(
+                    instanceA.onAgent(
+                            agent,
+                            validContext(),
+                            new AgentInput(List.of()),
+                            in ->
+                                    instanceB.onAgent(
+                                            agent, validContext(), in, innerIn -> flow())));
+        } finally {
+            host.end();
+        }
+
+        // Instance A captured and published the original host context; instance B linked the
+        // same snapshot instead of capturing A's CLS spans.
+        for (SpanData entry : List.of(singleEntry(exporterA), singleEntry(exporterB))) {
+            assertThat(entry.getLinks()).hasSize(1);
+            assertThat(entry.getLinks().get(0).getSpanContext().getTraceId())
+                    .isEqualTo(host.getSpanContext().getTraceId());
+            assertThat(entry.getLinks().get(0).getSpanContext().getSpanId())
+                    .isEqualTo(host.getSpanContext().getSpanId());
+            assertThat(entry.getParentSpanContext().isValid()).isFalse();
+        }
+
+        instanceA.close();
+        instanceB.close();
+        providerA.close();
+        providerB.close();
         hostProvider.close();
     }
 

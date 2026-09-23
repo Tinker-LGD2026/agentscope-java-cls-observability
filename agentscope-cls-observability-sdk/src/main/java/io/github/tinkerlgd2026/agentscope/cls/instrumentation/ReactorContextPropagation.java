@@ -12,6 +12,8 @@ import reactor.core.publisher.Flux;
  * runWithContext; LEGACY_HOOK keeps the 0.2 global registration and never resets it.
  */
 final class ReactorContextPropagation {
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(ReactorContextPropagation.class);
     private static final AtomicBoolean LEGACY_HOOK_REGISTERED = new AtomicBoolean();
 
     private final ReactorContextMode mode;
@@ -51,6 +53,10 @@ final class ReactorContextPropagation {
     /** 0.2-compatible global registration; never resets the process-wide operator. */
     static void registerLegacyHookOnce() {
         if (LEGACY_HOOK_REGISTERED.compareAndSet(false, true)) {
+            LOGGER.warn(
+                    "CLS reactorContextHookEnabled/LEGACY_HOOK is deprecated;"
+                            + " the process-wide Reactor operator registration is permanent."
+                            + " Prefer ReactorContextMode.PRIVATE or BRIDGE.");
             ContextPropagationOperator.builder().build().registerOnEachOperator();
         }
     }

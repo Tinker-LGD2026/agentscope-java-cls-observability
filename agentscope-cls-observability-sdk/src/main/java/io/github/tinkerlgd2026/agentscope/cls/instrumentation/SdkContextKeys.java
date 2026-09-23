@@ -27,14 +27,18 @@ final class SdkContextKeys {
                 new Object(), new Object(), new Object(), new Object(), new Object());
     }
 
-    /** 0.2-compatible shared class keys used only by the legacy hook mode. */
+    /**
+     * 0.2-compatible shared class keys used only by the legacy hook mode. The guard key stays
+     * per-instance: duplicate detection is a 0.3 addition with no 0.2 counterpart, and a shared
+     * guard key would make two distinct legacy instances flag each other.
+     */
     static SdkContextKeys legacy() {
         return new SdkContextKeys(
                 InvocationState.class,
                 InvocationState.AgentFrame.class,
                 InvocationState.StepFrame.class,
                 io.opentelemetry.context.Context.class,
-                ClsTracingMiddleware.class);
+                new Object());
     }
 
     Object invocationKey() {

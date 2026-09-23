@@ -183,6 +183,75 @@ class ClsTracingMiddlewareHitlTest {
                 .isEqualTo("normal");
     }
 
+    @Test
+    void exceedMaxItersRoutesToControlledOutcome() {
+        run(Flux.just(
+                new io.agentscope.core.event.ExceedMaxItersEvent("reply-1", 10, 10),
+                resultEvent()));
+
+        SpanData entry = entrySpan();
+        assertThat(
+                        entry.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("max_iters");
+        assertThat(entry.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        assertThat(entry.getAttributes().get(AttributeKey.booleanKey("gen_ai.incomplete")))
+                .isTrue();
+    }
+
+    @Test
+    void requestStopRoutesToInterruptedOutcome() {
+        run(Flux.just(
+                new io.agentscope.core.event.RequestStopEvent("reply-1"),
+                resultEvent()));
+
+        SpanData entry = entrySpan();
+        assertThat(
+                        entry.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("interrupted");
+    }
+
+    @Test
+    void lateResultAfterTimeoutDoesNotReviveOldSpansAndTurnStaysAwaitTimeout() {
+        reactor.core.publisher.Sinks.Many<AgentEvent> sink =
+                reactor.core.publisher.Sinks.many().unicast().onBackpressureBuffer();
+        middleware
+                .onAgent(agent, validContext(), new AgentInput(List.of()), ignored -> sink.asFlux())
+                .subscribe();
+        sink.tryEmitNext(new RequireUserConfirmEvent("reply-1", toolCalls()));
+
+        // Wait for the 200ms HITL timeout to terminate the generation.
+        SpanData entry = entrySpan();
+        assertThat(
+                        entry.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("await_timeout");
+
+        // Late result arrives after termination: consumed without reviving old spans.
+        sink.tryEmitNext(
+                new UserConfirmResultEvent(
+                        "reply-1", List.of(new ConfirmResult(true, toolCalls().get(0)))));
+        sink.tryEmitNext(resultEvent());
+        sink.tryEmitComplete();
+
+        long finished = exporter.getFinishedSpanItems().size();
+        assertThat(
+                        exporter.getFinishedSpanItems().stream()
+                                .filter(
+                                        span ->
+                                                "entry"
+                                                        .equals(
+                                                                span.getAttributes()
+                                                                        .get(
+                                                                                AttributeKey
+                                                                                        .stringKey(
+                                                                                "gen_ai.span.kind"))))
+                                .count())
+                .isEqualTo(1);
+        assertThat(finished).isGreaterThan(0);
+    }
+
     private void run(Flux<AgentEvent> flow) {
         middleware
                 .onAgent(agent, validContext(), new AgentInput(List.of()), ignored -> flow)

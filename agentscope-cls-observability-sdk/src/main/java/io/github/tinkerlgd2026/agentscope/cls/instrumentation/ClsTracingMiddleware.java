@@ -103,7 +103,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final BooleanSupplier active;
     private final TelemetryCounters counters;
     private final boolean reactorContextHookEnabled;
-    private java.time.Duration hitlWaitTimeout = java.time.Duration.ofMinutes(10);
+    private final java.time.Duration hitlWaitTimeout;
     private volatile java.util.concurrent.ScheduledExecutorService controlScheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicLong lastWarningNanos = new AtomicLong(Long.MIN_VALUE);
@@ -849,6 +849,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                                         controlTracker
                                                                                 .resolveOnComplete();
                                                         controlTracker.cancelAll();
+                                                        releaseControlPlane(state);
                                                         endAgentTreeOutcome(
                                                                 ended,
                                                                 agentSpan,
@@ -875,6 +876,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                     finishOpenStep(agentFrame, "error", error);
                                                     if (rootEntry != null && controlTracker != null) {
                                                         controlTracker.cancelAll();
+                                                        releaseControlPlane(state);
                                                         endAgentTreeOutcome(
                                                                 ended,
                                                                 agentSpan,
@@ -903,6 +905,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                     finishOpenStep(agentFrame, "cancelled", null);
                                                     if (rootEntry != null && controlTracker != null) {
                                                         controlTracker.cancelAll();
+                                                        releaseControlPlane(state);
                                                         endAgentTreeOutcome(
                                                                 ended,
                                                                 agentSpan,
@@ -1360,6 +1363,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         }
         InvocationLifecycle lifecycle = new InvocationLifecycle();
         InvocationLease lease = new InvocationLease(lifecycle);
+        InvocationCaptureBudget controlBudget =
+                new InvocationCaptureBudget(captureMemoryPool, maxInvocationCaptureMemoryBytes);
         ControlEventTracker tracker =
                 new ControlEventTracker(
                         new ControlScheduler(controlScheduler()),
@@ -1371,6 +1376,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         () -> {
                                             finishOpenStep(
                                                     agentFrame, outcome.finishReason(), null);
+                                            // Advance the generation state machine first so
+                                            // late results can rotate; spans follow.
+                                            lifecycle.terminal(outcome, resultObserved, null);
                                             endAgentTreeOutcome(
                                                     ended,
                                                     agentSpan,
@@ -1382,8 +1390,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                     state.controlTracker());
                                         }),
                         1024,
-                        System::nanoTime);
-        state.bindControlPlane(lease, tracker);
+                        System::nanoTime,
+                        controlBudget);
+        state.bindControlPlane(lease, tracker, controlBudget);
         return tracker;
     }
 
@@ -1502,6 +1511,17 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 span.setAttribute(
                         ClsFields.HITL_TOTAL_WAIT_MS, tracker.totalWaitNanos() / 1_000_000L);
             }
+        }
+    }
+
+    private static void releaseControlPlane(InvocationState state) {
+        InvocationLease lease = state.lease();
+        if (lease != null) {
+            lease.freeze();
+        }
+        InvocationCaptureBudget budget = state.controlBudget();
+        if (budget != null) {
+            budget.close();
         }
     }
 

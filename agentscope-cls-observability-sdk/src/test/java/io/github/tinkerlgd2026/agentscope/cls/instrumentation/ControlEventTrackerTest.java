@@ -204,7 +204,11 @@ class ControlEventTrackerTest {
                                 lease.current().terminal(outcome, resultObserved, null);
                             },
                             maxControlRecords,
-                            ticker::get);
+                            ticker::get,
+                            new InvocationCaptureBudget(
+                                    new io.github.tinkerlgd2026.agentscope.cls.internal
+                                            .CaptureMemoryPool(1 << 20),
+                                    1 << 20));
         }
     }
 }

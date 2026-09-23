@@ -24,6 +24,7 @@ final class InvocationState {
     private volatile @Nullable Span entrySpan;
     private volatile @Nullable InvocationLease lease;
     private volatile @Nullable ControlEventTracker controlTracker;
+    private volatile @Nullable InvocationCaptureBudget controlBudget;
     private volatile @Nullable String resumeFromTurnId;
 
     InvocationState(
@@ -69,9 +70,17 @@ final class InvocationState {
         entrySpan = value;
     }
 
-    void bindControlPlane(InvocationLease newLease, ControlEventTracker tracker) {
+    void bindControlPlane(
+            InvocationLease newLease,
+            ControlEventTracker tracker,
+            InvocationCaptureBudget budget) {
         lease = newLease;
         controlTracker = tracker;
+        controlBudget = budget;
+    }
+
+    @Nullable InvocationCaptureBudget controlBudget() {
+        return controlBudget;
     }
 
     @Nullable InvocationLease lease() {

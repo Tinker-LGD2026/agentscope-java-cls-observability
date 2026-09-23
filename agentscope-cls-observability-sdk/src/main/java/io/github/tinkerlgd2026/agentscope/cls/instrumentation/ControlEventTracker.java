@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import org.jspecify.annotations.Nullable;
@@ -32,8 +33,11 @@ final class ControlEventTracker {
     private final TerminalReducer terminal;
     private final int maxRecords;
     private final LongSupplier ticker;
+    private final InvocationCaptureBudget budget;
 
     private final LinkedHashMap<String, ControlRecord> records = new LinkedHashMap<>();
+    private final Map<String, InvocationCaptureBudget.Reservation> reservations =
+            new HashMap<>();
     private final Map<String, ControlRecord> activeByKey = new HashMap<>();
     private final Map<String, Deque<String>> secondaryIndex = new HashMap<>();
     private final Map<String, InvocationLifecycle> generations = new HashMap<>();
@@ -57,7 +61,8 @@ final class ControlEventTracker {
             InvocationLifecycle initialGeneration,
             TerminalReducer terminal,
             int maxRecords,
-            LongSupplier ticker) {
+            LongSupplier ticker,
+            InvocationCaptureBudget budget) {
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.waitTimeout = Objects.requireNonNull(waitTimeout, "waitTimeout");
         this.lease = Objects.requireNonNull(lease, "lease");
@@ -68,6 +73,7 @@ final class ControlEventTracker {
         }
         this.maxRecords = maxRecords;
         this.ticker = Objects.requireNonNull(ticker, "ticker");
+        this.budget = Objects.requireNonNull(budget, "budget");
         generations.put(initialGeneration.generationId(), initialGeneration);
     }
 
@@ -89,7 +95,14 @@ final class ControlEventTracker {
             terminateGeneration(TerminalOutcome.CONTROL_CAPACITY);
             return;
         }
+        Optional<InvocationCaptureBudget.Reservation> reservation =
+                budget.reserve(ControlRecord.ESTIMATED_BYTES);
+        if (reservation.isEmpty()) {
+            terminateGeneration(TerminalOutcome.CONTROL_CAPACITY);
+            return;
+        }
         records.put(record.key(), record);
+        reservations.put(record.key(), reservation.orElseThrow());
         activeByKey.put(record.key(), record);
         secondaryIndex.computeIfAbsent(record.secondaryKey(), ignored -> new ArrayDeque<>())
                 .addLast(record.key());
@@ -122,8 +135,7 @@ final class ControlEventTracker {
             timer.cancel();
         }
         activeByKey.remove(record.key());
-        removeFromSecondary(record);
-        records.remove(record.key());
+        removeRecord(record);
         waitCount++;
         totalWaitNanos += Math.max(0L, ticker.getAsLong() - record.createdNanos());
     }
@@ -157,6 +169,8 @@ final class ControlEventTracker {
     synchronized void cancelAll() {
         timers.values().forEach(ControlScheduler.Cancellable::cancel);
         timers.clear();
+        reservations.values().forEach(InvocationCaptureBudget.Reservation::close);
+        reservations.clear();
     }
 
     synchronized boolean waiting() {
@@ -212,7 +226,9 @@ final class ControlEventTracker {
             record.markTombstone(null);
         }
         activeByKey.clear();
-        terminal.terminate(outcome, resultObserved);
+        // Capacity loss must never claim a completed turn, even if a result was seen first.
+        boolean completed = outcome != TerminalOutcome.CONTROL_CAPACITY && resultObserved;
+        terminal.terminate(outcome, completed);
     }
 
     private @Nullable ControlRecord earliestMatch(ControlRecord.Kind kind, String replyId) {
@@ -231,6 +247,10 @@ final class ControlEventTracker {
     private void removeRecord(ControlRecord record) {
         records.remove(record.key());
         removeFromSecondary(record);
+        InvocationCaptureBudget.Reservation reservation = reservations.remove(record.key());
+        if (reservation != null) {
+            reservation.close();
+        }
     }
 
     private void removeFromSecondary(ControlRecord record) {

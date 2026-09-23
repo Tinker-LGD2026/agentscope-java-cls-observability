@@ -95,7 +95,11 @@ class TerminalOutcomeRaceTest {
                             lease.current().terminal(outcome, resultObserved, null);
                         },
                         1024,
-                        ticker::get);
+                        ticker::get,
+                        new InvocationCaptureBudget(
+                                new io.github.tinkerlgd2026.agentscope.cls.internal
+                                        .CaptureMemoryPool(1 << 20),
+                                1 << 20));
 
         private void advance(Duration duration) {
             ticker.addAndGet(duration.toNanos());

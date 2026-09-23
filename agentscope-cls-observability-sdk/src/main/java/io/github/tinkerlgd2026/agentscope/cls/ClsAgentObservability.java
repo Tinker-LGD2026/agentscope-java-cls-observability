@@ -74,7 +74,12 @@ public final class ClsAgentObservability implements AutoCloseable {
                 config.transportMode() == ClsObservabilityConfig.TransportMode.CLOUD
                         ? new TencentClsSpanSink(
                                 Objects.requireNonNull(config.topicId()),
-                                new TencentClsAsyncTransport(config))
+                                new TencentClsAsyncTransport(config),
+                                config.exportTimeout(),
+                                new io.github.tinkerlgd2026.agentscope.cls.transport
+                                        .TencentExportBatchPlanner(
+                                        config.maxExportBatchBytes(),
+                                        config.maxExportBatchCount()))
                         : new ConsoleSpanSink(objectMapper, System.out);
         return create(config, sink, objectMapper);
     }

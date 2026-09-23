@@ -142,6 +142,96 @@ class TencentClsSpanSinkTest {
                 .hasMessageContaining("closed");
     }
 
+    @Test
+    void splitsOversizedExportIntoPhysicalSlicesWithinThresholds() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        TencentClsSpanSink sink =
+                new TencentClsSpanSink(
+                        "topic-test",
+                        transport,
+                        Duration.ofSeconds(5),
+                        new TencentExportBatchPlanner(4 * 1024, 256));
+        List<ClsSpanRecord> records = new ArrayList<>();
+        for (int index = 0; index < 5; index++) {
+            records.add(bigRecord("0123456789abcde" + index, 2 * 1024));
+        }
+
+        CompletionStage<Void> export = sink.export(records);
+        assertThat(transport.submissions).hasSizeGreaterThan(1);
+        transport.completeAllSuccessfully();
+        export.toCompletableFuture().get(1, TimeUnit.SECONDS);
+
+        int total = transport.submissions.stream().mapToInt(List::size).sum();
+        assertThat(total).isEqualTo(5);
+    }
+
+    @Test
+    void oneSliceFailureFailsExportButSiblingSlicesAreStillSubmitted() {
+        FakeTransport transport = new FakeTransport();
+        TencentClsSpanSink sink =
+                new TencentClsSpanSink(
+                        "topic-test",
+                        transport,
+                        Duration.ofSeconds(5),
+                        new TencentExportBatchPlanner(4 * 1024, 1));
+        List<ClsSpanRecord> records =
+                List.of(record("0123456789abcdef"), record("fedcba9876543210"));
+
+        CompletionStage<Void> export = sink.export(records);
+        assertThat(transport.submissions).hasSize(2);
+        transport.complete(0, failure("InternalError", "boom"));
+        transport.complete(1, success());
+
+        assertThatThrownBy(() -> export.toCompletableFuture().join())
+                .hasCauseInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void allSlicesShareOneExportDeadline() {
+        FakeTransport transport = new FakeTransport();
+        TencentClsSpanSink sink =
+                new TencentClsSpanSink(
+                        "topic-test",
+                        transport,
+                        Duration.ofMillis(30),
+                        new TencentExportBatchPlanner(4 * 1024, 1));
+        CompletionStage<Void> export =
+                sink.export(List.of(record("0123456789abcdef"), record("fedcba9876543210")));
+
+        assertThatThrownBy(() -> export.toCompletableFuture().get(1, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(java.util.concurrent.TimeoutException.class);
+        // Both slices were submitted before the shared deadline expired.
+        assertThat(transport.submissions).hasSize(2);
+    }
+
+    private static ClsSpanRecord bigRecord(String spanId, int payloadBytes) {
+        return new ClsSpanRecord(
+                "0123456789abcdef0123456789abcdef",
+                spanId,
+                "",
+                "chat model-x",
+                "client",
+                "1000000000",
+                "2000000000",
+                "1000000000",
+                "OK",
+                "",
+                "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\",\"gen_ai.agent.type\":\"agentscope-java\",\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\",\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\",\"big\":\""
+                        + "x".repeat(payloadBytes)
+                        + "\"}",
+                "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                "",
+                "[]",
+                "[]");
+    }
+
+    private static Result failure(String code, String message) {
+        return new Result(
+                false,
+                List.of(new Attempt(false, "request", code, message, System.currentTimeMillis())),
+                1);
+    }
+
     private static ClsSpanRecord record(String spanId) {
         return new ClsSpanRecord(
                 "0123456789abcdef0123456789abcdef",
@@ -233,6 +323,14 @@ class TencentClsSpanSinkTest {
 
         void complete(int index, Result result) {
             pending.get(index).complete(result);
+        }
+
+        void completeAllSuccessfully() {
+            for (CompletableFuture<Result> future : pending) {
+                if (!future.isDone()) {
+                    future.complete(success());
+                }
+            }
         }
     }
 }

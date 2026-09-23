@@ -38,11 +38,6 @@ enum TerminalOutcome {
         };
     }
 
-    /** Controlled terminations keep OK and never carry an exception marker. */
-    boolean controlledOk() {
-        return statusCode() == StatusCode.OK;
-    }
-
     /** Status description: empty for UNSET, safe marker for cancelled, error type otherwise. */
     String statusDescription(Throwable error) {
         return switch (this) {

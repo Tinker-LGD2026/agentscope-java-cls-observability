@@ -14,7 +14,8 @@ import org.jspecify.annotations.Nullable;
 /**
  * Owns the span tree of one invocation generation. The only component allowed to call
  * {@code Span.end()}; terminal transitions are linearized (first terminal wins) and children
- * always end before parents.
+ * always end before parents. Spans registered after terminal begins are ended immediately so
+ * nothing leaks.
  */
 final class InvocationLifecycle {
     enum State {
@@ -23,6 +24,7 @@ final class InvocationLifecycle {
         FINISHED
     }
 
+    private final Object registrationLock = new Object();
     private final AtomicReference<State> state = new AtomicReference<>(State.OPEN);
     private final AtomicReference<TerminalOutcome> terminalOutcome = new AtomicReference<>();
     private final AtomicLong lateTerminalSignals = new AtomicLong();
@@ -44,23 +46,57 @@ final class InvocationLifecycle {
     }
 
     void registerEntry(Span span) {
-        entrySpan.set(Objects.requireNonNull(span, "entry span"));
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                entrySpan.set(Objects.requireNonNull(span, "entry span"));
+                return;
+            }
+        }
+        endImmediately(span);
     }
 
     void registerAgent(String agentId, Span span) {
-        agentSpans.add(Objects.requireNonNull(span, "agent span"));
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                agentSpans.add(Objects.requireNonNull(span, "agent span"));
+                return;
+            }
+        }
+        endImmediately(span);
     }
 
     void registerStep(String agentId, String stepId, Span span) {
-        stepSpans.add(Objects.requireNonNull(span, "step span"));
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                stepSpans.add(Objects.requireNonNull(span, "step span"));
+                return;
+            }
+        }
+        endImmediately(span);
     }
 
     void registerChat(String stepId, Span span) {
-        chatAndToolSpans.add(Objects.requireNonNull(span, "chat span"));
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                chatAndToolSpans.add(Objects.requireNonNull(span, "chat span"));
+                return;
+            }
+        }
+        endImmediately(span);
     }
 
     void registerTool(String stepId, String callId, Span span) {
-        chatAndToolSpans.add(Objects.requireNonNull(span, "tool span"));
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                chatAndToolSpans.add(Objects.requireNonNull(span, "tool span"));
+                return;
+            }
+        }
+        endImmediately(span);
+    }
+
+    private boolean acceptsRegistrations() {
+        return state.get() == State.OPEN;
     }
 
     /**
@@ -78,26 +114,51 @@ final class InvocationLifecycle {
         }
         terminalOutcome.set(outcome);
         try {
-            for (Span span : chatAndToolSpans) {
-                endQuietly(span, outcome, error);
-            }
-            for (Span span : stepSpans) {
-                endQuietly(span, outcome, error);
-            }
-            for (Span span : agentSpans) {
-                endQuietly(span, outcome, error);
-            }
-            Span entry = entrySpan.get();
-            if (entry != null) {
-                entry.setAttribute(ClsFields.TURN_COMPLETED, resultObserved);
-                entry.setAttribute(ClsFields.TURN_FINISH_REASON, outcome.finishReason());
-                entry.setAttribute(ClsFields.INCOMPLETE, outcome.incomplete());
-                endQuietly(entry, outcome, error);
+            // Holding the registration lock makes registrations race-free with termination:
+            // a span is either in the lists before the scan or ended immediately afterwards.
+            synchronized (registrationLock) {
+                for (Span span : chatAndToolSpans) {
+                    endQuietly(span, outcome, error);
+                }
+                for (Span span : stepSpans) {
+                    endQuietly(span, outcome, error);
+                }
+                for (Span span : agentSpans) {
+                    endQuietly(span, outcome, error);
+                }
+                Span entry = entrySpan.get();
+                if (entry != null) {
+                    endAttributeQuietly(
+                            entry,
+                            () -> {
+                                entry.setAttribute(ClsFields.TURN_COMPLETED, resultObserved);
+                                entry.setAttribute(
+                                        ClsFields.TURN_FINISH_REASON, outcome.finishReason());
+                                entry.setAttribute(ClsFields.INCOMPLETE, outcome.incomplete());
+                            });
+                    endQuietly(entry, outcome, error);
+                }
             }
         } finally {
             state.set(State.FINISHED);
         }
         return true;
+    }
+
+    private static void endImmediately(Span span) {
+        try {
+            span.end();
+        } catch (RuntimeException | StackOverflowError ignored) {
+            // Telemetry must never fail the host application.
+        }
+    }
+
+    private static void endAttributeQuietly(Span span, Runnable attributes) {
+        try {
+            attributes.run();
+        } catch (RuntimeException | StackOverflowError ignored) {
+            // Terminal attributes are best-effort; the span still ends below.
+        }
     }
 
     private static void endQuietly(
@@ -120,8 +181,10 @@ final class InvocationLifecycle {
                     }
                 }
             }
+        } catch (RuntimeException | StackOverflowError ignored) {
+            // Status marking is best-effort; the span must still end.
         } finally {
-            span.end();
+            endImmediately(span);
         }
     }
 }

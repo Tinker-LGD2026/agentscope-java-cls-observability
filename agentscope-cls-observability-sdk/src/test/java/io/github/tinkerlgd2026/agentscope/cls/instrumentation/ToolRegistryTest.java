@@ -56,6 +56,50 @@ class ToolRegistryTest {
     }
 
     @Test
+    void concurrentStartsNeverExceedCapacity() throws Exception {
+        ToolRegistry registry = new ToolRegistry(4, 128);
+        int threads = 8;
+        int perThread = 50;
+        Thread[] workers = new Thread[threads];
+        java.util.concurrent.atomic.AtomicInteger activeCount = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        for (int index = 0; index < threads; index++) {
+            int worker = index;
+            workers[index] =
+                    new Thread(
+                            () -> {
+                                await(start);
+                                for (int tool = 0; tool < perThread; tool++) {
+                                    if (registry
+                                            .startTool(
+                                                    "agent-1",
+                                                    "step-1",
+                                                    "w" + worker + "-c" + tool,
+                                                    "t")
+                                            .active()) {
+                                        activeCount.incrementAndGet();
+                                    }
+                                }
+                            });
+            workers[index].start();
+        }
+        start.countDown();
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        assertThat(activeCount.get()).isEqualTo(4);
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Test
     void duplicateStartWithSameCallIdKeepsOriginalToken() {
         ToolRegistry registry = new ToolRegistry();
         ToolRegistry.ToolToken first = registry.startTool("agent-1", "step-1", "call-1", "search");

@@ -109,7 +109,19 @@ class ClsTracingMiddlewareCancellationTest {
     }
 
     @Test
-    void modelStreamCancellationEndsChatBeforeAgentAndEntry() {
+    @org.junit.jupiter.api.Disabled(
+            "strict chat-before-agent end ordering requires the InvocationLifecycle wiring task")
+    void modelStreamCancellationEndsChatStrictlyBeforeAgentAndEntry() {
+        modelStreamCancellationEndsWithCancelledMarker();
+        List<SpanData> finished = exporter.getFinishedSpanItems();
+        List<String> endOrder = finished.stream().map(SpanData::getName).toList();
+        int chatIndex = indexOfKind(endOrder, finished, "chat");
+        int agentIndex = indexOfKind(endOrder, finished, "agent");
+        assertThat(chatIndex).isLessThan(agentIndex);
+    }
+
+    @Test
+    void modelStreamCancellationEndsWithCancelledMarker() {
         middleware
                 .onAgent(
                         agent,
@@ -137,15 +149,13 @@ class ClsTracingMiddlewareCancellationTest {
         int chatIndex = indexOfKind(endOrder, finished, "chat");
         int agentIndex = indexOfKind(endOrder, finished, "agent");
         int entryIndex = indexOfKind(endOrder, finished, "entry");
-        // The chat span is ended with the cancelled marker; strict chat-before-agent end
-        // ordering arrives with the InvocationLifecycle wiring (middleware thinning task).
+        // The chat span carries the cancelled marker without a fabricated exception event;
+        // strict chat-before-agent ordering arrives with the lifecycle wiring task.
         assertThat(chatIndex).isGreaterThanOrEqualTo(0);
-        assertThat(
-                        finished
-                                .get(chatIndex)
-                                .getAttributes()
-                                .get(AttributeKey.stringKey("error.type")))
+        SpanData chat = finished.get(chatIndex);
+        assertThat(chat.getAttributes().get(AttributeKey.stringKey("error.type")))
                 .isEqualTo("cancelled");
+        assertThat(chat.getEvents()).isEmpty();
         assertThat(agentIndex).isLessThan(entryIndex);
     }
 

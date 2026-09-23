@@ -17,7 +17,7 @@ public final class DeadlineBudget {
         return start(timeout, System::nanoTime);
     }
 
-    static DeadlineBudget start(Duration timeout, LongSupplier ticker) {
+    public static DeadlineBudget start(Duration timeout, LongSupplier ticker) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("deadline timeout must be positive");
         }

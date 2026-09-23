@@ -39,9 +39,7 @@ final class InvocationLease {
 
     void noteLateEvent() {
         lateEvents.incrementAndGet();
-    }
-
-    /**
+    }    /**
      * Rotates away from a generation that has already been terminated (for example by an
      * await timeout): installs a fresh open generation. Rotating the same terminated
      * generation twice reuses the existing replacement; rotating an open generation is a
@@ -53,7 +51,9 @@ final class InvocationLease {
             lateEvents.incrementAndGet();
             return null;
         }
-        if (expectedOld.state() == InvocationLifecycle.State.OPEN) {
+        // Only a fully terminated generation (State.FINISHED) may rotate; an OPEN or
+        // still-finishing generation is a no-op so spans never overlap across generations.
+        if (expectedOld.state() != InvocationLifecycle.State.FINISHED) {
             return null;
         }
         if (current.get() != expectedOld) {

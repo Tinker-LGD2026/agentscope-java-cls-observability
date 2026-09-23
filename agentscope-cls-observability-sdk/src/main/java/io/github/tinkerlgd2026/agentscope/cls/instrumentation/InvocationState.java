@@ -242,14 +242,18 @@ final class InvocationState {
                     current.setAttribute("gen_ai.react.finish_reason", reason);
                     current.setAttribute("error.type", errorType);
                     current.setStatus(StatusCode.ERROR, Objects.requireNonNull(reason));
-                    current.addEvent(
-                            "exception",
-                            Objects.requireNonNull(
-                                    Attributes.builder()
-                                            .put(
-                                                    "exception.type",
-                                                    Objects.requireNonNull(errorType))
-                                            .build()));
+                    // Exception events are only recorded for a real Throwable; controlled
+                    // terminations like cancellation never fabricate one.
+                    if (error != null) {
+                        current.addEvent(
+                                "exception",
+                                Objects.requireNonNull(
+                                        Attributes.builder()
+                                                .put(
+                                                        "exception.type",
+                                                        Objects.requireNonNull(errorType))
+                                                .build()));
+                    }
                 } finally {
                     current.end();
                 }

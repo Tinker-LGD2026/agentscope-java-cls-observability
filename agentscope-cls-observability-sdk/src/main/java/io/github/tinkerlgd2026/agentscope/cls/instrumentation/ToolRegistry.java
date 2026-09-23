@@ -20,6 +20,7 @@ final class ToolRegistry {
     private final Map<String, Set<String>> stepTools = new ConcurrentHashMap<>();
     private final AtomicLong failedTools = new AtomicLong();
     private final AtomicLong capacityRejected = new AtomicLong();
+    private final AtomicLong duplicateRejected = new AtomicLong();
 
     ToolRegistry() {
         this(DEFAULT_MAX_TOOL_CONTEXTS, DEFAULT_MAX_TOOLS_PER_STEP);
@@ -33,23 +34,24 @@ final class ToolRegistry {
         this.maxToolsPerStep = maxToolsPerStep;
     }
 
-    ToolToken startTool(String agentId, String stepId, String callId, String name) {
+    /** Capacity checks and registration are atomic: exact bounds, never approximate. */
+    synchronized ToolToken startTool(String agentId, String stepId, String callId, String name) {
         if (callId == null || callId.isBlank()) {
             capacityRejected.incrementAndGet();
             return ToolToken.noop();
         }
-        Set<String> stepSet = stepTools.computeIfAbsent(stepId, ignored -> ConcurrentHashMap.newKeySet());
-        if (contexts.size() >= maxToolContexts
-                || stepSet.size() >= maxToolsPerStep
-                || contexts.containsKey(callId)) {
+        Set<String> stepSet =
+                stepTools.computeIfAbsent(stepId, ignored -> ConcurrentHashMap.newKeySet());
+        if (contexts.containsKey(callId)) {
+            duplicateRejected.incrementAndGet();
+            return ToolToken.noop();
+        }
+        if (contexts.size() >= maxToolContexts || stepSet.size() >= maxToolsPerStep) {
             capacityRejected.incrementAndGet();
             return ToolToken.noop();
         }
         ToolToken token = new ToolToken(this, callId, true);
-        if (contexts.putIfAbsent(callId, token) != null) {
-            capacityRejected.incrementAndGet();
-            return ToolToken.NOOP;
-        }
+        contexts.put(callId, token);
         stepSet.add(callId);
         return token;
     }
@@ -60,6 +62,10 @@ final class ToolRegistry {
 
     long capacityRejectedTools() {
         return capacityRejected.get();
+    }
+
+    long duplicateRejectedTools() {
+        return duplicateRejected.get();
     }
 
     /** Partial failure: some tool failed while the invocation itself may still succeed. */
@@ -73,7 +79,8 @@ final class ToolRegistry {
         private final ToolRegistry owner;
         private final String callId;
         private final boolean active;
-        private volatile boolean ended;
+        private final java.util.concurrent.atomic.AtomicBoolean ended =
+                new java.util.concurrent.atomic.AtomicBoolean();
 
         private ToolToken(ToolRegistry owner, String callId, boolean active) {
             this.owner = owner;
@@ -89,12 +96,15 @@ final class ToolRegistry {
             return active;
         }
 
-        /** Records the tool end; no-op tokens consume the event without side effects. */
+        /**
+         * Records the tool end; no-op tokens consume the event without side effects. Note that
+         * a no-op token's failure is intentionally invisible to partialFailure — capacity
+         * rejections are reported through capacityRejectedTools instead.
+         */
         public void end(boolean success) {
-            if (ended) {
+            if (!ended.compareAndSet(false, true)) {
                 return;
             }
-            ended = true;
             if (active && owner != null) {
                 owner.contexts.remove(callId);
                 owner.stepTools.values().forEach(set -> set.remove(callId));

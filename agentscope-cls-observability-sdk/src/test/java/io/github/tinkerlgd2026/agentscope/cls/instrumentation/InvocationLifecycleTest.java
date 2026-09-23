@@ -129,32 +129,24 @@ class InvocationLifecycleTest {
                 .isEqualTo("java.lang.IllegalStateException");
     }
 
-    @Test
-    void controlledOutcomesStayOkButIncomplete() {
-        for (TerminalOutcome outcome :
-                List.of(
-                        TerminalOutcome.DENIED,
-                        TerminalOutcome.MAX_ITERS,
-                        TerminalOutcome.INTERRUPTED)) {
-            setUp();
-            InvocationLifecycle lifecycle = new InvocationLifecycle();
-            lifecycle.registerEntry(span("entry"));
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(
+            value = TerminalOutcome.class,
+            names = {"DENIED", "MAX_ITERS", "INTERRUPTED"})
+    void controlledOutcomesStayOkButIncomplete(TerminalOutcome outcome) {
+        InvocationLifecycle lifecycle = new InvocationLifecycle();
+        lifecycle.registerEntry(span("entry"));
 
-            lifecycle.terminal(outcome, true, null);
+        lifecycle.terminal(outcome, true, null);
 
-            SpanData entry = exporter.getFinishedSpanItems().get(0);
-            assertThat(entry.getStatus().getStatusCode())
-                    .as(outcome.name())
-                    .isEqualTo(StatusCode.OK);
-            assertThat(
-                            entry.getAttributes()
-                                    .get(
-                                            io.opentelemetry.api.common.AttributeKey.booleanKey(
-                                                    "gen_ai.incomplete")))
-                    .as(outcome.name())
-                    .isTrue();
-            tearDown();
-        }
+        SpanData entry = exporter.getFinishedSpanItems().get(0);
+        assertThat(entry.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        assertThat(
+                        entry.getAttributes()
+                                .get(
+                                        io.opentelemetry.api.common.AttributeKey.booleanKey(
+                                                "gen_ai.incomplete")))
+                .isTrue();
     }
 
     @Test

@@ -67,6 +67,19 @@ class ActiveInvocationRegistryTest {
 
         assertThat(registry.awaitQuiescence(budget)).isFalse();
         registry.unregister(lease);
-        assertThat(registry.awaitQuiescence(budget)).isTrue();
+        assertThat(registry.awaitQuiescence(DeadlineBudget.start(Duration.ofSeconds(5))))
+                .isTrue();
+    }
+
+    @Test
+    void expiredBudgetWithActiveLeaseReturnsFalse() {
+        ActiveInvocationRegistry registry = new ActiveInvocationRegistry();
+        registry.registerRoot(new InvocationLease(new InvocationLifecycle()));
+        java.util.concurrent.atomic.AtomicLong ticker = new java.util.concurrent.atomic.AtomicLong();
+        DeadlineBudget expired =
+                DeadlineBudget.start(Duration.ofNanos(10), ticker::get);
+        ticker.set(1_000L);
+
+        assertThat(registry.awaitQuiescence(expired)).isFalse();
     }
 }

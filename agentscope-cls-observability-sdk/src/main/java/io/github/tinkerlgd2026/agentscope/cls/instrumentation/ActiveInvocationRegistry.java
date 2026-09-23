@@ -68,11 +68,13 @@ final class ActiveInvocationRegistry {
     }
 
     boolean awaitQuiescence(DeadlineBudget budget) {
-        while (leases.isEmpty() == false && !budget.expired()) {
+        while (!leases.isEmpty() && !budget.expired()) {
             synchronized (leases) {
                 if (!leases.isEmpty()) {
+                    long waitMillis =
+                            Math.min(10L, Math.max(1L, budget.remaining().toMillis()));
                     try {
-                        leases.wait(10);
+                        leases.wait(waitMillis);
                     } catch (InterruptedException exception) {
                         Thread.currentThread().interrupt();
                         return false;

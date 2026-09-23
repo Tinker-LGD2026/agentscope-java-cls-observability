@@ -73,7 +73,7 @@ graph TD
 <dependency>
     <groupId>io.github.tinkerlgd2026</groupId>
     <artifactId>agentscope-cls-observability-sdk</artifactId>
-    <version>0.1.0</version>
+    <version>0.3.0-SNAPSHOT</version>
 </dependency>
 ```
 

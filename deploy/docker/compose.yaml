@@ -7,7 +7,9 @@ services:
       CLS_SERVICE_NAME: ${CLS_SERVICE_NAME:-my-agent-service}
       CLS_DEPLOYMENT_ENVIRONMENT: ${CLS_DEPLOYMENT_ENVIRONMENT:-production}
       CLS_CONTENT_CAPTURE: ${CLS_CONTENT_CAPTURE:-off}
-      CLS_REACTOR_CONTEXT_HOOK: "false"
+      CLS_REASONING_CAPTURE: ${CLS_REASONING_CAPTURE:-off}
+      CLS_PROVIDER_PAYLOAD_CAPTURE: ${CLS_PROVIDER_PAYLOAD_CAPTURE:-off}
+      CLS_REACTOR_CONTEXT_MODE: ${CLS_REACTOR_CONTEXT_MODE:-private}
     user: "10001:10001"
     read_only: true
     tmpfs:
@@ -16,5 +18,5 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    stop_grace_period: 30s
+    stop_grace_period: 60s
     restart: unless-stopped

@@ -4,6 +4,42 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
+## [0.3.0-SNAPSHOT]
+
+### Added
+
+- HITL and external-execution lifecycle semantics: bounded waits, timeout tombstones,
+  exactly-once generation rotation, and deterministic terminal outcomes
+  (`gen_ai.turn.finish_reason`, `gen_ai.incomplete`, resume linkage).
+- Independent provider payload capture (`CLS_PROVIDER_PAYLOAD_CAPTURE`, default `off`) with
+  canonical off/hash/truncate/full envelopes.
+- Byte-aware `ClsBatchSpanProcessor`: spans are encoded at end time into bounded records;
+  count/byte/time triggers; queue and memory overflows count into `droppedSpans`.
+- Tencent CLS physical batch planning (`CLS_MAX_EXPORT_BATCH_BYTES`,
+  `CLS_MAX_EXPORT_BATCH_COUNT`, `CLS_PRODUCER_LINGER_MS`,
+  `CLS_MAX_PRODUCER_BUFFER_BYTES`); custom `SpanSink` still receives processor batches.
+- Graceful `shutdown(Duration)` with DRAINING semantics and 40/65/85/100 milestone budgets;
+  `close()` delegates to it and never throws telemetry failures.
+- Reactor context modes (`CLS_REACTOR_CONTEXT_MODE=private|bridge|legacy_hook`), per-instance
+  isolation keys, duplicate middleware detection, and optional host trace links
+  (`CLS_HOST_TRACE_LINK_ENABLED`, default `true`).
+- `detailedSnapshot()` with per-category counters.
+- `scripts/verify_release_metadata.py` release gate.
+
+### Changed
+
+- Single-field attribute budget tightened to 1,000,000 UTF-8 bytes; larger 0.2 values are
+  clamped with a startup warning.
+- Local tool failures mark the parent span partial (`gen_ai.partial_failure`,
+  `gen_ai.failed_tool_count`) instead of failing the whole turn.
+- Control events no longer report a plain `stop` finish reason.
+- `CLS_REACTOR_CONTEXT_HOOK` is deprecated and maps onto the new mode setting.
+
+### Privacy
+
+- Reasoning, provider payloads, and content remain independent capture switches, all default
+  `off`; streamed content is never fabricated after the fact.
+
 ## [0.2.0] - 2026-09-12
 
 ### Added

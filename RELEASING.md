@@ -20,7 +20,7 @@ This phase publishes GitHub source and Release assets only. It does not publish 
 ./mvnw -pl agentscope-cls-observability-sdk javadoc:javadoc
 ```
 
-Confirm the POM version is the exact release version (for example `0.2.0` for tag `v0.2.0`). The release workflow rejects a tag whose `v`-stripped value differs from the POM version. After publishing, prepare the next development version in a separate change.
+Confirm the POM version is the exact release version (for example `0.3.0` for tag `v0.3.0`). The release workflow runs `scripts/verify_release_metadata.py`, which rejects a tag that is malformed, whose `v`-stripped value differs from the POM version, that is not reachable from `origin/main`, or whose `.github/release-notes.md` does not mention the version. The workflow builds and verifies on both JDK 17 and JDK 21, runs a full-history Gitleaks scan, OSV scans both SBOMs, and checks all release assets. After publishing, prepare the next development version in a separate change.
 
 ## Tag
 

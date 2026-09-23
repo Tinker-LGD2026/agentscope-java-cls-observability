@@ -73,7 +73,8 @@ jobs:
         run: |
           export AGENT_IMAGE=registry.example.invalid/agent:0.0.0
           for manifest in deploy/kubernetes/configmap.yaml deploy/kubernetes/deployment.yaml; do
-            envsubst < "$manifest" > "/tmp/$(basename "$manifest")"
+            rendered="/tmp/$(basename "$manifest")"
+            envsubst < "$manifest" | tee "$rendered" > /dev/null
           done
           docker run --rm -v /tmp:/input:ro ghcr.io/yannh/kubeconform:v0.7.0 -summary -strict /input/configmap.yaml /input/deployment.yaml
       - name: ShellCheck secret helper
@@ -81,7 +82,8 @@ jobs:
       - name: systemd unit verify
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq systemd
-          systemd-analyze verify deploy/systemd/agentscope-agent.service.example
+          cp deploy/systemd/agentscope-agent.service.example /tmp/agentscope-agent.service
+          systemd-analyze verify /tmp/agentscope-agent.service
 
   links:
     name: Documentation links

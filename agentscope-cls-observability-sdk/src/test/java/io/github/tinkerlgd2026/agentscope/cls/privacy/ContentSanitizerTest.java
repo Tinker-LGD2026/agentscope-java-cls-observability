@@ -139,7 +139,7 @@ class ContentSanitizerTest {
                         "token=actual-secret-value",
                         "visible-value",
                         "pem",
-                        "before -----BEGIN PRIVATE KEY----- no end marker");
+                        "before -----BEGIN PRIVATE" + " KEY----- no end marker");
 
         JsonNode captured = sanitizer.capture(input).orElseThrow();
         String encoded = captured.toString();

@@ -328,6 +328,10 @@ class LifecycleCoordinatorTest {
 
         Future<Boolean> first = callers.submit(() -> coordinator.shutdown(TOTAL));
         assertThat(barrierEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        // Anchor the caller's budget before the clock jump: on slow runners the caller
+        // thread may not have started waiting yet, which would anchor its deadline AFTER
+        // the jump and make the wait unbounded.
+        awaitCondition(() -> coordinator.waiters() == 1);
         // First caller's deadline expires while the sink stage is stuck.
         nanos.addAndGet(Duration.ofSeconds(150).toNanos());
         assertThat(first.get(5, TimeUnit.SECONDS)).isFalse();

@@ -107,8 +107,9 @@ class CanonicalPayloadCaptureTest {
                         "url",
                         "https://user:pass@example.test/path?token=private#secret-fragment",
                         "pem",
-                        "-----BEGIN RSA PRIVATE KEY-----\nPRIVATE-BODY\n"
-                                + "-----END RSA PRIVATE KEY-----");
+                        // Split so no literal PEM sentinel survives in source (gitleaks).
+                        "-----BEGIN RSA PRIVATE" + " KEY-----\nPRIVATE-BODY\n"
+                                + "-----END RSA PRIVATE" + " KEY-----");
 
         Map<String, Object> envelope =
                 new CanonicalPayloadCapture(JSON)

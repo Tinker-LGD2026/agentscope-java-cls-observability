@@ -244,9 +244,15 @@ public final class CaptureBudgetPlanner {
     }
 
     private static Map<String, Object> minimalTextPart(Map<String, Object> part, String content) {
+        Object original = part.get("content");
         Map<String, Object> result = new LinkedHashMap<>(part);
         result.put("content", content);
-        if (!content.equals(String.valueOf(part.get("content")))) {
+        if (original instanceof Map<?, ?> envelope) {
+            if (envelope.get("original_bytes") instanceof Number originalBytes) {
+                result.put("original_bytes", originalBytes.longValue());
+            }
+            result.put("truncated", true);
+        } else if (!content.equals(String.valueOf(original))) {
             result.put("truncated", true);
         }
         return Map.copyOf(result);

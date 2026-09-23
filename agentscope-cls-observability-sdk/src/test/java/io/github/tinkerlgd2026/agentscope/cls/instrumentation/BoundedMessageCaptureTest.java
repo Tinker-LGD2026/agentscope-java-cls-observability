@@ -100,6 +100,28 @@ class BoundedMessageCaptureTest {
     }
 
     @Test
+    void emptyInputReturnsEmptyValueWithoutPhantomCapacityMetrics() {
+        BoundedMessageCapture capture =
+                new BoundedMessageCapture(
+                        JSON,
+                        ContentCaptureMode.FULL,
+                        ContentCaptureMode.FULL,
+                        ContentCaptureMode.OFF,
+                        256,
+                        256);
+
+        BoundedMessageCapture.Result result =
+                capture.captureMessages(
+                        List.of(), true, InvocationCaptureBudget.unbounded());
+
+        assertThat(result.value()).isEmpty();
+        assertThat(result.capacityDroppedParts()).isZero();
+        assertThat(result.capacityDroppedBytes()).isZero();
+        assertThat(result.retainedBytes()).isZero();
+        assertThat(result.originalBytes()).isZero();
+    }
+
+    @Test
     void reservationFailureReturnsSafeEmptyResultAndCapacityMetrics() {
         CaptureMemoryPool pool = new CaptureMemoryPool(64);
         try (InvocationCaptureBudget invocation = new InvocationCaptureBudget(pool, 64)) {

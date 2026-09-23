@@ -2,7 +2,6 @@ package io.github.tinkerlgd2026.agentscope.cls.privacy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,8 +15,6 @@ public final class MessageCapturePolicy {
     private static final int MAX_REASONING_PARTS = 8;
     private static final int MAX_CONTENT_PARTS = 16;
     private static final int MAX_TOOL_PARTS = 8;
-    private static final int MINIMAL_TEXT_BYTES = 64;
-    private static final int MINIMAL_IDENTITY_BYTES = 32;
 
     private final ObjectMapper objectMapper;
     private final ContentCaptureMode contentMode;
@@ -60,7 +57,7 @@ public final class MessageCapturePolicy {
                     objectMapper.convertValue(unplanned.value().orElseThrow(), List.class);
             return new CapturedMessages(captureWithPriority(captured), unplanned.observableHash());
         } catch (RuntimeException failure) {
-            return new CapturedMessages(Optional.empty(), Optional.empty());
+            return new CapturedMessages(Optional.empty(), unplanned.observableHash());
         }
     }
 
@@ -160,255 +157,6 @@ public final class MessageCapturePolicy {
         return new CaptureBudgetPlanner(objectMapper, finalBudgetSanitizer.maxBytes())
                 .capture(captured)
                 .value();
-    }
-
-    private static List<Map<String, Object>> minimalPriorityMessages(
-            List<Map<String, Object>> messages) {
-        List<Map<String, Object>> minimal = new ArrayList<>();
-        for (Map<String, Object> message : messages) {
-            List<Map<String, Object>> parts = new ArrayList<>();
-            for (Map<String, Object> part : asParts(message.get("parts"))) {
-                String type = String.valueOf(part.get("type"));
-                if ("text".equals(type)) {
-                    String text = safePreview(part.get("content"));
-                    String bounded = utf8Prefix(text, MINIMAL_TEXT_BYTES);
-                    Map<String, Object> minimalPart = new LinkedHashMap<>();
-                    minimalPart.put("type", "text");
-                    minimalPart.put("content", bounded);
-                    if (bounded.length() != text.length()) {
-                        minimalPart.put("truncated", true);
-                    }
-                    parts.add(Map.copyOf(minimalPart));
-                } else if ("text_hash".equals(type)) {
-                    parts.add(copyHashPart(part, "text_hash"));
-                } else if ("tool_call".equals(type) || "tool_call_response".equals(type)) {
-                    Map<String, Object> identity = new LinkedHashMap<>();
-                    identity.put("type", type);
-                    if (part.get("id") != null) {
-                        identity.put(
-                                "id",
-                                utf8Prefix(
-                                        String.valueOf(part.get("id")),
-                                        MINIMAL_IDENTITY_BYTES));
-                    }
-                    if (part.get("name") != null) {
-                        identity.put(
-                                "name",
-                                utf8Prefix(
-                                        String.valueOf(part.get("name")),
-                                        MINIMAL_IDENTITY_BYTES));
-                    }
-                    parts.add(Map.copyOf(identity));
-                }
-            }
-            if (parts.isEmpty()) {
-                continue;
-            }
-            Map<String, Object> copy = new LinkedHashMap<>();
-            copy.put(
-                    "role",
-                    utf8Prefix(
-                            String.valueOf(nonNullValue(message.get("role"), "unknown")),
-                            MINIMAL_IDENTITY_BYTES));
-            if (message.get("name") != null) {
-                copy.put(
-                        "name",
-                        utf8Prefix(
-                                String.valueOf(message.get("name")),
-                                MINIMAL_IDENTITY_BYTES));
-            }
-            copy.put("parts", List.copyOf(parts));
-            minimal.add(Map.copyOf(copy));
-        }
-        return List.copyOf(minimal);
-    }
-
-    private static String safePreview(@Nullable Object content) {
-        if (content instanceof JsonNode node) {
-            if (node.isTextual()) {
-                return node.asText();
-            }
-            if (node.path("preview").isTextual()) {
-                return node.path("preview").asText();
-            }
-            return "[TRUNCATED]";
-        }
-        return content == null ? "" : String.valueOf(content);
-    }
-
-    private static String utf8Prefix(String value, int maxBytes) {
-        StringBuilder result = new StringBuilder();
-        int bytes = 0;
-        for (int offset = 0; offset < value.length(); ) {
-            int codePoint = value.codePointAt(offset);
-            String character = new String(Character.toChars(codePoint));
-            int characterBytes = character.getBytes(StandardCharsets.UTF_8).length;
-            if (bytes + characterBytes > maxBytes) {
-                break;
-            }
-            result.append(character);
-            bytes += characterBytes;
-            offset += Character.charCount(codePoint);
-        }
-        return result.toString();
-    }
-
-    private static List<Map<String, Object>> latestPriorityMessages(
-            List<Map<String, Object>> messages, boolean includeText, boolean includeTool) {
-        PartLocation latestText = null;
-        PartLocation latestTool = null;
-        for (int messageIndex = messages.size() - 1; messageIndex >= 0; messageIndex--) {
-            List<Map<String, Object>> parts = asParts(messages.get(messageIndex).get("parts"));
-            for (int partIndex = parts.size() - 1; partIndex >= 0; partIndex--) {
-                String type = String.valueOf(parts.get(partIndex).get("type"));
-                if (includeText
-                        && latestText == null
-                        && ("text".equals(type) || "text_hash".equals(type))) {
-                    latestText = new PartLocation(messageIndex, partIndex);
-                }
-                if (includeTool
-                        && latestTool == null
-                        && ("tool_call".equals(type) || "tool_call_response".equals(type))) {
-                    latestTool = new PartLocation(messageIndex, partIndex);
-                }
-            }
-        }
-
-        List<Map<String, Object>> selected = new ArrayList<>();
-        for (int messageIndex = 0; messageIndex < messages.size(); messageIndex++) {
-            List<Map<String, Object>> parts = asParts(messages.get(messageIndex).get("parts"));
-            List<Map<String, Object>> selectedParts = new ArrayList<>(2);
-            for (int partIndex = 0; partIndex < parts.size(); partIndex++) {
-                PartLocation current = new PartLocation(messageIndex, partIndex);
-                if (current.equals(latestText) || current.equals(latestTool)) {
-                    selectedParts.add(parts.get(partIndex));
-                }
-            }
-            if (selectedParts.isEmpty()) {
-                continue;
-            }
-            Map<String, Object> message = messages.get(messageIndex);
-            Map<String, Object> copy = new LinkedHashMap<>();
-            copy.put("role", nonNullValue(message.get("role"), "unknown"));
-            if (message.get("name") != null) {
-                copy.put("name", message.get("name"));
-            }
-            copy.put("parts", List.copyOf(selectedParts));
-            selected.add(Map.copyOf(copy));
-        }
-        return List.copyOf(selected);
-    }
-
-    private List<Map<String, Object>> transformMessages(
-            List<Map<String, Object>> messages,
-            boolean removeReasoning,
-            boolean stripToolPayloads,
-            boolean removeTools) {
-        List<Map<String, Object>> transformed = new ArrayList<>();
-        for (Map<String, Object> message : messages) {
-            List<Map<String, Object>> parts =
-                    transformParts(
-                            asParts(message.get("parts")),
-                            removeReasoning,
-                            stripToolPayloads,
-                            removeTools);
-            if (parts.isEmpty()) {
-                continue;
-            }
-            Map<String, Object> copy = new LinkedHashMap<>();
-            copy.put("role", nonNullValue(message.get("role"), "unknown"));
-            if (message.get("name") != null) {
-                copy.put("name", message.get("name"));
-            }
-            copy.put("parts", parts);
-            transformed.add(Map.copyOf(copy));
-        }
-        return List.copyOf(transformed);
-    }
-
-    private List<Map<String, Object>> transformParts(
-            List<Map<String, Object>> parts,
-            boolean removeReasoning,
-            boolean stripToolPayloads,
-            boolean removeTools) {
-        List<Map<String, Object>> transformed = new ArrayList<>();
-        for (Map<String, Object> part : parts) {
-            String type = String.valueOf(part.getOrDefault("type", "unknown"));
-            if (removeReasoning
-                    && ("reasoning".equals(type) || "reasoning_hash".equals(type))) {
-                continue;
-            }
-            if (removeTools
-                    && ("tool_call".equals(type) || "tool_call_response".equals(type))) {
-                continue;
-            }
-            if (stripToolPayloads && "tool_call".equals(type)) {
-                transformed.add(toolIdentity(part, true));
-            } else if (stripToolPayloads && "tool_call_response".equals(type)) {
-                transformed.add(toolIdentity(part, true));
-            } else {
-                transformed.add(part);
-            }
-        }
-        return List.copyOf(transformed);
-    }
-
-    private static boolean containsText(List<Map<String, Object>> messages) {
-        for (Map<String, Object> message : messages) {
-            for (Map<String, Object> part : asParts(message.get("parts"))) {
-                String type = String.valueOf(part.get("type"));
-                if ("text".equals(type) || "text_hash".equals(type)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static boolean containsText(Optional<JsonNode> messages) {
-        return containsType(messages, "text", "text_hash");
-    }
-
-    private static boolean containsTool(List<Map<String, Object>> messages) {
-        for (Map<String, Object> message : messages) {
-            for (Map<String, Object> part : asParts(message.get("parts"))) {
-                String type = String.valueOf(part.get("type"));
-                if ("tool_call".equals(type) || "tool_call_response".equals(type)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static boolean containsTool(Optional<JsonNode> messages) {
-        return containsType(messages, "tool_call", "tool_call_response");
-    }
-
-    private static boolean retainsExpectedPriority(
-            Optional<JsonNode> messages, boolean textExpected, boolean toolExpected) {
-        return (!textExpected || containsText(messages))
-                && (!toolExpected || containsTool(messages));
-    }
-
-    private static boolean containsType(
-            Optional<JsonNode> messages, String firstType, String secondType) {
-        if (messages.isEmpty() || !messages.orElseThrow().isArray()) {
-            return false;
-        }
-        for (JsonNode message : messages.orElseThrow()) {
-            JsonNode parts = message.get("parts");
-            if (parts == null || !parts.isArray()) {
-                continue;
-            }
-            for (JsonNode part : parts) {
-                String type = part.path("type").asText();
-                if (firstType.equals(type) || secondType.equals(type)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private List<Map<String, Object>> captureMessages(List<Map<String, Object>> messages) {
@@ -615,8 +363,6 @@ public final class MessageCapturePolicy {
     }
 
     private record BoundedMessages(List<Map<String, Object>> messages, boolean complete) {}
-
-    private record PartLocation(int messageIndex, int partIndex) {}
 
     private static final class SelectionLimits {
         private static final int MAX_MESSAGES = 32;

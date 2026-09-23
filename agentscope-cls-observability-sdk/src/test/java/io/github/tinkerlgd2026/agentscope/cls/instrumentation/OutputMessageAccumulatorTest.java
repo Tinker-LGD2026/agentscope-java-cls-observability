@@ -190,6 +190,27 @@ class OutputMessageAccumulatorTest {
     }
 
     @Test
+    void capacityRejectedDeltaAndEndAreNotCountedAsMalformed() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
+        for (int index = 0; index < 129; index++) {
+            accumulator.accept(
+                    new ThinkingBlockStartEvent("reply", "think-" + index),
+                    index + 1L);
+        }
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think-128", "payload"), 200L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "think-128"), 300L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "never-seen"), 400L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+
+        assertThat(result.reasoning().malformedEventCount()).isEqualTo(1);
+        assertThat(result.capacityDroppedParts()).isEqualTo(2);
+        assertThat(result.capacityDroppedBytes()).isGreaterThan(0);
+        assertThat(result.reasoning().truncated()).isTrue();
+    }
+
+    @Test
     void exactOutputQuotasKeepFinalTextAndTool() {
         OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
         for (int index = 0; index < 128; index++) {

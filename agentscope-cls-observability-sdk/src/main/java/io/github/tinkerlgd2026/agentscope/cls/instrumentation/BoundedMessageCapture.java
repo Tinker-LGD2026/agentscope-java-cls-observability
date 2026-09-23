@@ -42,6 +42,20 @@ final class BoundedMessageCapture {
             InvocationCaptureBudget invocationBudget) {
         Objects.requireNonNull(invocationBudget, "invocationBudget");
         List<Map<String, Object>> source = messages == null ? List.of() : messages;
+        if (source.isEmpty()) {
+            MessageCapturePolicy.CapturedMessages emptySemantic =
+                    semanticPolicy.captureUnplanned(List.of(), true, sourceComplete);
+            return new Result(
+                    Optional.empty(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    sourceComplete && emptySemantic.observableHash().isPresent(),
+                    emptySemantic.observableHash(),
+                    ContentCaptureMode.OFF,
+                    null);
+        }
         long originalBytes = encodedBytes(source);
         try {
             List<Map<String, Object>> semanticSource = removeProvider(source);
@@ -61,8 +75,8 @@ final class BoundedMessageCapture {
                         Optional.empty(),
                         originalBytes,
                         0,
-                        Math.max(1, countParts(source)),
-                        Math.max(1, originalBytes),
+                        countParts(source),
+                        originalBytes,
                         sourceComplete && semantic.observableHash().isPresent(),
                         semantic.observableHash(),
                         ContentCaptureMode.OFF,

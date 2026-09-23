@@ -135,53 +135,9 @@ public final class MessageCapturePolicy {
         if (captured.isEmpty()) {
             return Optional.empty();
         }
-        boolean textExpected = containsText(captured);
-        boolean toolExpected = containsTool(captured);
-        Optional<JsonNode> value = finalBudgetSanitizer.captureMessages(captured);
-        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
-            return value;
-        }
-
-        List<Map<String, Object>> withoutReasoning = transformMessages(captured, true, false, false);
-        value = finalBudgetSanitizer.captureMessages(withoutReasoning);
-        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
-            return value;
-        }
-
-        List<Map<String, Object>> withoutToolPayloads =
-                transformMessages(withoutReasoning, false, true, false);
-        value = finalBudgetSanitizer.captureMessages(withoutToolPayloads);
-        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
-            return value;
-        }
-
-        List<Map<String, Object>> latestPriority =
-                latestPriorityMessages(withoutToolPayloads, textExpected, toolExpected);
-        value = finalBudgetSanitizer.captureMessages(latestPriority);
-        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
-            return value;
-        }
-
-        List<Map<String, Object>> minimalPriority = minimalPriorityMessages(latestPriority);
-        value = finalBudgetSanitizer.captureMessages(minimalPriority);
-        if (retainsExpectedPriority(value, textExpected, toolExpected)) {
-            return value;
-        }
-
-        if (textExpected) {
-            List<Map<String, Object>> latestText =
-                    minimalPriorityMessages(
-                            latestPriorityMessages(withoutToolPayloads, true, false));
-            value = finalBudgetSanitizer.captureMessages(latestText);
-            if (containsText(value)) {
-                return value;
-            }
-        }
-        List<Map<String, Object>> latestTool =
-                minimalPriorityMessages(
-                        latestPriorityMessages(withoutToolPayloads, false, toolExpected));
-        value = finalBudgetSanitizer.captureMessages(latestTool);
-        return containsTool(value) ? value : Optional.empty();
+        return new CaptureBudgetPlanner(objectMapper, finalBudgetSanitizer.maxBytes())
+                .capture(captured)
+                .value();
     }
 
     private static List<Map<String, Object>> minimalPriorityMessages(
@@ -516,6 +472,9 @@ public final class MessageCapturePolicy {
                     .capture(arguments)
                     .ifPresent(value -> result.put("arguments", value));
         }
+        if (Boolean.TRUE.equals(part.get("truncated"))) {
+            result.put("truncated", true);
+        }
         return Map.copyOf(result);
     }
 
@@ -536,6 +495,9 @@ public final class MessageCapturePolicy {
         }
         if (includeName && part.get("name") != null) {
             result.put("name", part.get("name"));
+        }
+        if (part.get("state") != null) {
+            result.put("state", part.get("state"));
         }
         return result;
     }

@@ -939,6 +939,16 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         span.setAttribute(
                 ClsFields.REASONING_MALFORMED_EVENTS,
                 reasoning.malformedEventCount());
+        if (result.capacityDroppedParts() > 0 || result.capacityDroppedBytes() > 0) {
+            counters.capacityDropped(
+                    result.capacityDroppedParts(), result.capacityDroppedBytes());
+            span.setAttribute(
+                    "agentscope.capture.capacity_dropped_parts",
+                    result.capacityDroppedParts());
+            span.setAttribute(
+                    "agentscope.capture.capacity_dropped_bytes",
+                    result.capacityDroppedBytes());
+        }
         reasoning.timeToFirstTokenMs()
                 .ifPresent(value -> span.setAttribute(ClsFields.REASONING_TTFT_MS, value));
         result.responseTimeToFirstTokenMs()

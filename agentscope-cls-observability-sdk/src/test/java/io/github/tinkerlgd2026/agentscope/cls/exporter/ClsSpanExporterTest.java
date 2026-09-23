@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
+import io.github.tinkerlgd2026.agentscope.cls.schema.ClsFieldLimits;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator;
@@ -81,6 +82,60 @@ class ClsSpanExporterTest {
         assertThat(sink.records()).hasSize(2);
         assertThat(counters.snapshot().invalidSpans()).isEqualTo(1);
         assertThat(counters.snapshot().acceptedSpans()).isEqualTo(2);
+    }
+
+    @Test
+    void cropsOversizedSpanInsteadOfRejectingAndKeepsValidSibling() {
+        ObjectMapper json = new ObjectMapper();
+        InMemorySpanSink sink = new InMemorySpanSink();
+        TelemetryCounters counters = new TelemetryCounters();
+        ClsSpanExporter exporter =
+                new ClsSpanExporter(
+                        new ClsSpanEncoder(json), new ClsSpanValidator(json), sink, counters);
+
+        CompletableResultCode result =
+                exporter.export(List.of(oversizedSpanData(), spanData(false)));
+        result.join(1, TimeUnit.SECONDS);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(sink.records()).singleElement().satisfies(
+                record -> {
+                    assertThat(record.name()).isEqualTo("chat oversized");
+                    assertThat(
+                                    record.attribute()
+                                            .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                                            .length)
+                            .isLessThanOrEqualTo(ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES);
+                    assertThat(record.attribute()).contains("\"truncated\":true");
+                });
+        assertThat(counters.snapshot().acceptedSpans()).isEqualTo(1);
+        assertThat(counters.snapshot().invalidSpans()).isEqualTo(1);
+    }
+
+    private static SpanData oversizedSpanData() {
+        CapturingExporter capture = new CapturingExporter();
+        Resource resource =
+                Resource.builder().put("service.name", "svc").put("host.name", "host").build();
+        try (SdkTracerProvider provider =
+                SdkTracerProvider.builder()
+                        .setResource(resource)
+                        .addSpanProcessor(SimpleSpanProcessor.create(capture))
+                        .build()) {
+            Span span =
+                    provider.get("test")
+                            .spanBuilder("chat oversized")
+                            .setAttribute("gen_ai.span.kind", "chat")
+                            .setAttribute("gen_ai.operation.name", "chat")
+                            .setAttribute("gen_ai.agent.type", "agentscope-java")
+                            .setAttribute("gen_ai.session.id", "session")
+                            .setAttribute("gen_ai.turn.id", "turn")
+                            .setAttribute("gen_ai.user.id", "user")
+                            .setAttribute("gen_ai.user.name", "User")
+                            .setAttribute("custom.big", "x".repeat(1_200_000))
+                            .startSpan();
+            span.end();
+        }
+        return capture.spans.get(0);
     }
 
     private static SpanData reasoningSpanData(boolean validHash) {

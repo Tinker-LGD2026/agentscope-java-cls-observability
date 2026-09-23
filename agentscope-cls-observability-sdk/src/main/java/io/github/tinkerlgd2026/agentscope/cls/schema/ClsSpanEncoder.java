@@ -26,12 +26,19 @@ public final class ClsSpanEncoder {
                     "gen_ai.tool.call.result");
 
     private final ObjectMapper objectMapper;
+    private final BoundedFieldEncoder boundedFieldEncoder;
 
     public ClsSpanEncoder(ObjectMapper objectMapper) {
+        this(objectMapper, ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES);
+    }
+
+    public ClsSpanEncoder(ObjectMapper objectMapper, int attributeMaxBytes) {
         if (objectMapper == null) {
             throw new IllegalArgumentException("objectMapper is required");
         }
         this.objectMapper = objectMapper;
+        this.boundedFieldEncoder =
+                new BoundedFieldEncoder(objectMapper, attributeMaxBytes);
     }
 
     public ClsSpanRecord encode(SpanData span) {
@@ -63,7 +70,12 @@ public final class ClsSpanEncoder {
                         traceState(span),
                         json(links),
                         json(logs));
-        return new ClsSpanDocument(record, attribute, resource, links, logs);
+        BoundedFieldEncoder.Result bounded = boundedFieldEncoder.encode(record);
+        if (!bounded.accepted()) {
+            throw new IllegalArgumentException(
+                    "span record rejected by field limits: " + bounded.rejection());
+        }
+        return new ClsSpanDocument(bounded.record(), attribute, resource, links, logs);
     }
 
     private ObjectNode attributes(Attributes attributes, boolean parseStructuredJson) {

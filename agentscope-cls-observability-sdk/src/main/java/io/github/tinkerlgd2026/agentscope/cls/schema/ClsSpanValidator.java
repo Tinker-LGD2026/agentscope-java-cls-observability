@@ -48,7 +48,36 @@ public final class ClsSpanValidator {
                     ClsFields.REASONING_MALFORMED_EVENTS,
                     ClsFields.RESPONSE_TTFT_MS);
     private static final List<String> BOOLEAN_ATTRIBUTES =
-            List.of(ClsFields.REASONING_PRESENT, ClsFields.REASONING_TRUNCATED);
+            List.of(
+                    ClsFields.REASONING_PRESENT,
+                    ClsFields.REASONING_TRUNCATED,
+                    ClsFields.TURN_COMPLETED,
+                    ClsFields.INCOMPLETE,
+                    ClsFields.PARTIAL_FAILURE,
+                    ClsFields.CAPTURE_TRUNCATED,
+                    ClsFields.CAPTURE_HASH_COMPLETE);
+    private static final List<String> NON_NEGATIVE_LONG_ATTRIBUTES =
+            List.of(
+                    ClsFields.HITL_WAIT_COUNT,
+                    ClsFields.HITL_TOTAL_WAIT_MS,
+                    ClsFields.FAILED_TOOL_COUNT,
+                    ClsFields.CAPTURE_ORIGINAL_BYTES,
+                    ClsFields.CAPTURE_RETAINED_BYTES,
+                    ClsFields.CAPTURE_CAPACITY_DROPPED_PARTS,
+                    ClsFields.CAPTURE_CAPACITY_DROPPED_BYTES,
+                    ClsFields.CAPTURE_FAILURE_COUNT);
+    private static final Set<String> TURN_FINISH_REASONS =
+            Set.of(
+                    "normal",
+                    "incomplete_completion",
+                    "await_timeout",
+                    "control_capacity",
+                    "denied",
+                    "max_iters",
+                    "interrupted",
+                    "cancelled",
+                    "error",
+                    "shutdown");
     private static final Set<String> CAPTURE_MODES =
             Set.of("off", "hash", "truncate", "full");
     private static final List<String> COMMON_ATTRIBUTES =
@@ -62,12 +91,18 @@ public final class ClsSpanValidator {
                     ClsFields.USER_NAME);
 
     private final ObjectMapper objectMapper;
+    private final MessageSchemaValidator messageValidator;
 
     public ClsSpanValidator(ObjectMapper objectMapper) {
-        if (objectMapper == null) {
-            throw new IllegalArgumentException("objectMapper is required");
+        this(objectMapper, new MessageSchemaValidator());
+    }
+
+    ClsSpanValidator(ObjectMapper objectMapper, MessageSchemaValidator messageValidator) {
+        if (objectMapper == null || messageValidator == null) {
+            throw new IllegalArgumentException("objectMapper and messageValidator are required");
         }
         this.objectMapper = objectMapper;
+        this.messageValidator = messageValidator;
     }
 
     public List<String> validate(ClsSpanRecord record) {
@@ -77,8 +112,8 @@ public final class ClsSpanValidator {
         List<String> errors = new ArrayList<>();
         JsonNode attributes = parseObject(errors, "attribute", record.attribute());
         JsonNode resources = parseObject(errors, "resource", record.resource());
-        parseArray(errors, "links", record.links());
-        parseArray(errors, "logs", record.logs());
+        parseArrayOrEnvelope(errors, "links", record.links());
+        parseArrayOrEnvelope(errors, "logs", record.logs());
         validateRecord(errors, record, attributes, resources);
         return List.copyOf(errors);
     }
@@ -115,11 +150,11 @@ public final class ClsSpanValidator {
         }
         validateTimes(errors, record);
 
-        if (resources != null) {
+        if (resources != null && !truncatedEnvelope(errors, "resource", resources)) {
             requireJsonText(errors, resources, "resource", "service.name");
             requireJsonText(errors, resources, "resource", "host.name");
         }
-        if (attributes != null) {
+        if (attributes != null && !truncatedEnvelope(errors, "attribute", attributes)) {
             for (String key : COMMON_ATTRIBUTES) {
                 requireJsonText(errors, attributes, "attribute", key);
             }
@@ -137,16 +172,22 @@ public final class ClsSpanValidator {
         }
     }
 
-    private static void validateAttributeTypes(List<String> errors, JsonNode attributes) {
+    private void validateAttributeTypes(List<String> errors, JsonNode attributes) {
         for (String key : MESSAGE_ATTRIBUTES) {
             JsonNode value = attributes.get(key);
             if (value != null && !value.isArray()) {
                 errors.add("attribute." + key + " must be a JSON array");
             } else if (value != null) {
-                validateReasoningParts(errors, value, key);
+                messageValidator.validate(errors, value, key);
             }
         }
         for (String key : INTEGER_ATTRIBUTES) {
+            JsonNode value = attributes.get(key);
+            if (value != null) {
+                validateNonNegativeLong(errors, value, "attribute." + key);
+            }
+        }
+        for (String key : NON_NEGATIVE_LONG_ATTRIBUTES) {
             JsonNode value = attributes.get(key);
             if (value != null) {
                 validateNonNegativeLong(errors, value, "attribute." + key);
@@ -162,6 +203,17 @@ public final class ClsSpanValidator {
         if (captureMode != null
                 && (!captureMode.isTextual() || !CAPTURE_MODES.contains(captureMode.asText()))) {
             errors.add("attribute." + ClsFields.REASONING_CAPTURE_MODE + " is unsupported");
+        }
+        JsonNode finishReason = attributes.get(ClsFields.TURN_FINISH_REASON);
+        if (finishReason != null
+                && (!finishReason.isTextual()
+                        || !TURN_FINISH_REASONS.contains(finishReason.asText()))) {
+            errors.add("attribute." + ClsFields.TURN_FINISH_REASON + " is unsupported");
+        }
+        JsonNode resumeFrom = attributes.get(ClsFields.TURN_RESUME_FROM_TURN_ID);
+        if (resumeFrom != null && !resumeFrom.isTextual()) {
+            errors.add(
+                    "attribute." + ClsFields.TURN_RESUME_FROM_TURN_ID + " must be a string");
         }
         JsonNode finishReasons = attributes.get("gen_ai.response.finish_reasons");
         if (finishReasons != null
@@ -181,75 +233,6 @@ public final class ClsSpanValidator {
             requireJsonText(errors, attributes, "attribute", "gen_ai.tool.type");
             requireJsonInteger(
                     errors, attributes, "attribute", "gen_ai.tool.call.duration_ms");
-        }
-    }
-
-    private static void validateReasoningParts(
-            List<String> errors, JsonNode messages, String attributeKey) {
-        String prefix = "attribute." + attributeKey;
-        for (JsonNode message : messages) {
-            if (message.isObject()) {
-                validatePartArray(errors, message.get("parts"), prefix);
-            }
-        }
-    }
-
-    private static void validatePartArray(
-            List<String> errors, JsonNode parts, String prefix) {
-        if (parts == null || !parts.isArray()) {
-            return;
-        }
-        for (JsonNode part : parts) {
-            if (!part.isObject()) {
-                continue;
-            }
-            String type = part.path("type").asText();
-            if ("reasoning".equals(type)) {
-                validateReasoningContent(errors, part.get("content"), prefix);
-            } else if ("reasoning_hash".equals(type)) {
-                validateReasoningHash(errors, part, prefix);
-            } else if ("tool_call_response".equals(type)) {
-                validatePartArray(errors, part.get("result"), prefix);
-            }
-        }
-    }
-
-    private static void validateReasoningContent(
-            List<String> errors, JsonNode content, String prefix) {
-        if (content == null || (!content.isTextual() && !isSafeSummary(content))) {
-            errors.add(prefix + " reasoning.content summary is invalid");
-        }
-    }
-
-    private static boolean isSafeSummary(JsonNode content) {
-        if (!content.isObject()
-                || content.size() != 3
-                || !content.path("truncated").isBoolean()
-                || !content.path("truncated").asBoolean()
-                || !content.path("preview").isTextual()) {
-            return false;
-        }
-        JsonNode originalBytes = content.get("original_bytes");
-        return originalBytes != null
-                && originalBytes.isIntegralNumber()
-                && originalBytes.canConvertToLong()
-                && originalBytes.longValue() >= 0;
-    }
-
-    private static void validateReasoningHash(
-            List<String> errors, JsonNode part, String prefix) {
-        JsonNode sha256 = part.get("sha256");
-        if (sha256 == null
-                || !sha256.isTextual()
-                || !SHA_256.matcher(sha256.asText()).matches()) {
-            errors.add(prefix + " reasoning_hash.sha256 is invalid");
-        }
-        JsonNode originalBytes = part.get("original_bytes");
-        if (originalBytes == null) {
-            errors.add(prefix + " reasoning_hash.original_bytes must be an integer");
-        } else {
-            validateNonNegativeLong(
-                    errors, originalBytes, prefix + " reasoning_hash.original_bytes");
         }
     }
 
@@ -292,6 +275,48 @@ public final class ClsSpanValidator {
         } catch (RuntimeException exception) {
             errors.add("start, end and duration must be non-negative integer strings");
         }
+    }
+
+    // Returns true when the node is a valid truncated field envelope, meaning the original
+    // content was cropped by BoundedFieldEncoder and content checks must be skipped.
+    private static boolean truncatedEnvelope(
+            List<String> errors, String field, JsonNode node) {
+        JsonNode truncated = node.get("truncated");
+        if (truncated == null || !truncated.isBoolean() || !truncated.asBoolean()) {
+            return false;
+        }
+        JsonNode sha256 = node.get("sha256");
+        JsonNode preview = node.get("preview");
+        JsonNode originalBytes = node.get("original_bytes");
+        boolean valid =
+                node.size() == 4
+                        && sha256 != null
+                        && sha256.isTextual()
+                        && SHA_256.matcher(sha256.asText()).matches()
+                        && preview != null
+                        && preview.isTextual()
+                        && originalBytes != null
+                        && originalBytes.isIntegralNumber()
+                        && originalBytes.canConvertToLong()
+                        && originalBytes.longValue() >= 0;
+        if (!valid) {
+            errors.add(field + " is not a valid truncated field envelope");
+        }
+        return valid;
+    }
+
+    private JsonNode parseArrayOrEnvelope(List<String> errors, String field, String json) {
+        JsonNode value = parseJson(errors, field, json);
+        if (value == null || value.isArray()) {
+            return value;
+        }
+        if (value.isObject() && truncatedEnvelope(errors, field, value)) {
+            return value;
+        }
+        if (!value.isObject()) {
+            errors.add(field + " must encode a JSON array");
+        }
+        return null;
     }
 
     private JsonNode parseObject(List<String> errors, String field, String json) {

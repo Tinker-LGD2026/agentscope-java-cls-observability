@@ -315,6 +315,158 @@ class ClsSpanEncoderTest {
                         "attribute.gen_ai.tool.call.duration_ms must be an integer");
     }
 
+    @Test
+    void cropsOversizedAttributeResourceLinksAndLogsToDeterministicEnvelopes() throws Exception {
+        CapturingExporter capture = new CapturingExporter();
+        Resource resource =
+                Resource.builder()
+                        .put("service.name", "test-service")
+                        .put("host.name", "test-host")
+                        .put("custom.resource", "r".repeat(70_000))
+                        .build();
+        try (SdkTracerProvider provider =
+                SdkTracerProvider.builder()
+                        .setResource(resource)
+                        .addSpanProcessor(SimpleSpanProcessor.create(capture))
+                        .build()) {
+            Span span =
+                    provider.get("test").spanBuilder("chat model-x")
+                            .setAttribute(ClsFields.SPAN_KIND, "chat")
+                            .setAttribute(ClsFields.OPERATION_NAME, "chat")
+                            .setAttribute(ClsFields.AGENT_TYPE, "agentscope-java")
+                            .setAttribute(ClsFields.SESSION_ID, "session-1")
+                            .setAttribute(ClsFields.TURN_ID, "turn-1")
+                            .setAttribute(ClsFields.USER_ID, "user-1")
+                            .setAttribute(ClsFields.USER_NAME, "User One")
+                            .setAttribute("custom.big", "中".repeat(400_000))
+                            .startSpan();
+            for (int index = 0; index < 100; index++) {
+                span.addLink(
+                        span.getSpanContext(),
+                        io.opentelemetry.api.common.Attributes.of(
+                                AttributeKey.stringKey("link.attr"), "l".repeat(2_000)));
+            }
+            for (int index = 0; index < 100; index++) {
+                span.addEvent(
+                        "event-" + index,
+                        io.opentelemetry.api.common.Attributes.of(
+                                AttributeKey.stringKey("event.attr"), "e".repeat(4_000)));
+            }
+            span.end();
+        }
+
+        ClsSpanRecord record = new ClsSpanEncoder(JSON).encode(capture.single());
+
+        assertThat(utf8(record.attribute()))
+                .isLessThanOrEqualTo(ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES);
+        assertThat(utf8(record.resource())).isLessThanOrEqualTo(ClsFieldLimits.RESOURCE_MAX_BYTES);
+        assertThat(utf8(record.links())).isLessThanOrEqualTo(ClsFieldLimits.LINKS_MAX_BYTES);
+        assertThat(utf8(record.logs())).isLessThanOrEqualTo(ClsFieldLimits.LOGS_MAX_BYTES);
+        assertThat(Utf8LogItemSizer.size(record.fields()))
+                .isLessThanOrEqualTo(ClsFieldLimits.RECORD_MAX_BYTES);
+        JsonNode attribute = JSON.readTree(record.attribute());
+        assertThat(attribute.path("truncated").asBoolean()).isTrue();
+        assertThat(attribute.path("sha256").asText()).matches("[0-9a-f]{64}");
+        assertThat(attribute.path("original_bytes").asLong()).isGreaterThan(1_000_000L);
+        assertThat(new ClsSpanValidator(JSON).validate(record)).isEmpty();
+    }
+
+    @Test
+    void keepsFieldsAtExactLimitsUnchanged() {
+        String small = "{\"service.name\":\"svc\",\"host.name\":\"host\"}";
+        ClsSpanRecord record =
+                new ClsSpanRecord(
+                        "0123456789abcdef0123456789abcdef",
+                        "0123456789abcdef",
+                        "",
+                        "chat model-x",
+                        "client",
+                        "100",
+                        "200",
+                        "100",
+                        "OK",
+                        "",
+                        VALID_MINIMAL_ATTRIBUTES,
+                        small,
+                        "",
+                        "[]",
+                        "[]");
+
+        BoundedFieldEncoder.Result result =
+                new BoundedFieldEncoder(JSON, ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES)
+                        .encode(record);
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.record()).isSameAs(record);
+    }
+
+    @Test
+    void rejectsNonCroppableInvalidIdsAndTimes() {
+        ClsSpanRecord badTrace =
+                new ClsSpanRecord(
+                        "zzzz",
+                        "0123456789abcdef",
+                        "",
+                        "chat model-x",
+                        "client",
+                        "100",
+                        "200",
+                        "100",
+                        "OK",
+                        "",
+                        VALID_MINIMAL_ATTRIBUTES,
+                        "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                        "",
+                        "[]",
+                        "[]");
+
+        BoundedFieldEncoder.Result result =
+                new BoundedFieldEncoder(JSON, ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES)
+                        .encode(badTrace);
+
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.rejection()).contains("traceID");
+    }
+
+    @Test
+    void rejectsRecordAboveHardLimitEvenAfterCropping() {
+        String bigName = "n".repeat(ClsFieldLimits.NAME_MAX_BYTES);
+        ClsSpanRecord record =
+                new ClsSpanRecord(
+                        "0123456789abcdef0123456789abcdef",
+                        "0123456789abcdef",
+                        "",
+                        bigName,
+                        "client",
+                        "100",
+                        "200",
+                        "100",
+                        "OK",
+                        "m".repeat(ClsFieldLimits.STATUS_MESSAGE_MAX_BYTES),
+                        VALID_MINIMAL_ATTRIBUTES,
+                        "{\"service.name\":\"svc\",\"host.name\":\"host\"}",
+                        "t".repeat(ClsFieldLimits.TRACE_STATE_MAX_BYTES),
+                        "[]",
+                        "[]");
+
+        BoundedFieldEncoder.Result result =
+                new BoundedFieldEncoder(JSON, ClsFieldLimits.DEFAULT_ATTRIBUTE_MAX_BYTES, 8_192)
+                        .encode(record);
+
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.rejection()).contains("record");
+    }
+
+    private static final String VALID_MINIMAL_ATTRIBUTES =
+            "{\"gen_ai.span.kind\":\"chat\",\"gen_ai.operation.name\":\"chat\","
+                    + "\"gen_ai.agent.type\":\"agentscope-java\","
+                    + "\"gen_ai.session.id\":\"s\",\"gen_ai.turn.id\":\"t\","
+                    + "\"gen_ai.user.id\":\"u\",\"gen_ai.user.name\":\"U\"}";
+
+    private static int utf8(String value) {
+        return value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
     private static ClsSpanRecord validRecord(String attributes) {
         return new ClsSpanRecord(
                 "0123456789abcdef0123456789abcdef",

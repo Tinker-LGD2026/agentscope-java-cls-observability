@@ -1,41 +1,30 @@
-## AgentScope Java CLS Observability SDK 0.2.0
+## AgentScope Java CLS Observability SDK 0.3.0
 
-第二个公开预览版本：新增 Provider 无关的通用 Reasoning（思考模式）可观测性。
+第三个公开预览版本：可观测性硬化（spec 030）——背压、隐私、Span 语义、导出管线与生命周期全面加固。
 
 ### 新增
 
-- Chat Span 按原始顺序输出 AgentScope `ThinkingBlock` / Text / Tool Call 三类中性 parts；
-- 独立隐私开关 `CLS_REASONING_CAPTURE`（`off`/`hash`/`truncate`/`full`，默认 `off`）——普通正文开启不会自动上传推理内容；
-- Reasoning 指标：`present`、块数、原始字节数、推理耗时、推理/回答首片段时间、截断与畸形事件计数；
-- 旅行 Demo 增加显式 `TRAVEL_ENABLE_REASONING` 开关（默认 `false`）。
+- **HITL / 外部执行生命周期语义**：有界等待、超时 tombstone、恰好一次的 generation rotation，以及确定性的终止结果（`gen_ai.turn.finish_reason`、`gen_ai.incomplete`、resume 关联）；超时轮换后恢复的业务落在新的 turn/trace 上。
+- **独立 Provider 载荷捕获** `CLS_PROVIDER_PAYLOAD_CAPTURE`（默认 `off`），canonical off/hash/truncate/full 包络。
+- **字节感知批处理**：`ClsBatchSpanProcessor` 在 span 结束时即编码为有界记录，数量/字节/时间三重触发，队列与内存溢出计入 `droppedSpans`；`encodedSpanQueueBytes`  gauge。
+- **CLS 物理批量规划**：`CLS_MAX_EXPORT_BATCH_BYTES`、`CLS_MAX_EXPORT_BATCH_COUNT`、`CLS_PRODUCER_LINGER_MS`、`CLS_MAX_PRODUCER_BUFFER_BYTES`；自定义 `SpanSink` 仍接收处理器批次。
+- **优雅停机** `shutdown(Duration)`：DRAINING 语义 + 40/65/85/100 里程碑预算；`close()` 委托且永不抛出遥测故障；卡死调用可被 freeze 收口并释放资源。
+- **Reactor 上下文模式** `CLS_REACTOR_CONTEXT_MODE=private|bridge|legacy_hook`：实例级隔离键、重复中间件检测、可选宿主 trace 链接（`CLS_HOST_TRACE_LINK_ENABLED`，默认 `true`）。
+- `detailedSnapshot()` 细粒度计数器；`scripts/verify_release_metadata.py` 发布门禁。
 
-### 安全与隐私
+### 变更
 
-- Reasoning `off` 不上传推理原文或稳定 Hash；signature、加密推理和 `ThinkingBlock.metadata` 永不进入 Span；
-- 上游未提供 Reasoning Token 时不再误写 `gen_ai.usage.reasoning_output_tokens=0`；
-- 消息转换与流式累加具备固定内存/part 上限，最终预算优先保留最新最终回答与 Tool 身份；
-- 不完整的消息转换不再发布误导性的输入 Hash。
+- 单字段属性预算收紧至 1,000,000 UTF-8 字节（0.2 的更大值会被钳制并告警）。
+- 本地工具失败将父 Span 标记为 partial（`gen_ai.partial_failure`、`gen_ai.failed_tool_count`），不再使整个 turn 失败。
+- 控制事件不再上报 plain `stop` finish reason。
+- `CLS_REACTOR_CONTEXT_HOOK` 弃用，映射到新的模式设置。
+
+### 隐私
+
+- Reasoning、Provider 载荷与正文保持独立捕获开关，默认全部 `off`；流式内容绝不在事后伪造。
 
 ### 已验证
 
-- JDK 17 / 21 全量测试通过；
-- 双 SBOM（SDK 运行时 + AgentScope 2.0.3 消费者基线）OSV 扫描 0 发现；
-- DeepSeek `deepseek-chat` 开启 Thinking 的真实联调通过：Console 与 CLS 云端双模式，reasoning/text 顺序、隐私隔离与投递计数符合设计；
-- 其他 Provider 是否产生完整 Thinking 事件取决于对应 AgentScope Extension，见 `docs/compatibility.md`。
-
-### 安装方式
-
-本阶段仅发布 GitHub 源码和 Release 资产，**尚未发布 Maven Central 或 GitHub Packages**：
-
-```bash
-git clone https://github.com/Tinker-LGD2026/agentscope-java-cls-observability.git
-cd agentscope-java-cls-observability
-git checkout v0.2.0
-./mvnw clean install
-```
-
-### 兼容性
-
-- 最低 JDK 17；已验证 JDK 17、21；
-- 已验证 AgentScope Java 2.0.3；其他 2.x 未承诺兼容；
-- 新增公共配置属性 `reasoningCaptureMode` 与 `CLS_REASONING_CAPTURE`；既有 `0.1.0` 行为默认不变。
+- JDK 17 + JDK 21 全量 `clean verify`：343 SDK + 24 demo 测试全绿；
+- 真实 DeepSeek/CLS 联调矩阵（off/truncate/full × 正文/推理/Provider 载荷）通过，计数器零异常；
+- OSV-Scanner 双 SBOM 零发现；Gitleaks 全历史干净；CI 十项检查（含 CodeQL、部署模板、发布元数据脚本）全绿。

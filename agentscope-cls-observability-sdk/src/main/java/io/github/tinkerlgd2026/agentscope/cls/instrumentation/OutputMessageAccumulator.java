@@ -361,6 +361,8 @@ final class OutputMessageAccumulator {
         rejectedLifecycleTypes.put(key, kind);
     }
 
+    // Consumes the rejection record: a mismatched-kind end is itself malformed, so the
+    // entry is intentionally removed even when the kinds differ.
     private boolean endOfRejected(BlockKey key, PartKind kind) {
         return rejectedLifecycleTypes.remove(key) == kind;
     }

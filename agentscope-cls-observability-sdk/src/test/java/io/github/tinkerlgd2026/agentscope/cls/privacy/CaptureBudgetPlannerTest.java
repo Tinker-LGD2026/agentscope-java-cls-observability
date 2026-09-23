@@ -74,6 +74,30 @@ class CaptureBudgetPlannerTest {
         assertThat(result.truncated()).isTrue();
     }
 
+    @Test
+    void envelopeCollapsePreservesOriginalBytesAndMarksTruncated() throws Exception {
+        Map<String, Object> envelope =
+                Map.of(
+                        "truncated", true,
+                        "original_bytes", 2_048L,
+                        "preview", "final-answer-" + "x".repeat(400));
+        CaptureBudgetPlanner.Result result =
+                new CaptureBudgetPlanner(JSON, 256)
+                        .capture(
+                                List.of(
+                                        message(
+                                                "assistant",
+                                                part("text", "content", envelope))));
+
+        JsonNode part = result.value().orElseThrow().at("/0/parts/0");
+        assertThat(part.path("type").asText()).isEqualTo("text");
+        assertThat(part.path("content").asText()).startsWith("final-answer-");
+        assertThat(part.path("original_bytes").asLong()).isEqualTo(2_048L);
+        assertThat(part.path("truncated").asBoolean()).isTrue();
+        assertThat(JSON.writeValueAsBytes(result.value().orElseThrow()).length)
+                .isLessThanOrEqualTo(256);
+    }
+
     @SafeVarargs
     private static Map<String, Object> message(
             String role, Map<String, Object>... parts) {

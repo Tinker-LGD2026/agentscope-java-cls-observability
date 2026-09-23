@@ -119,6 +119,8 @@ class BoundedMessageCaptureTest {
         assertThat(result.capacityDroppedBytes()).isZero();
         assertThat(result.retainedBytes()).isZero();
         assertThat(result.originalBytes()).isZero();
+        assertThat(result.observableHash()).isPresent();
+        assertThat(result.hashComplete()).isTrue();
     }
 
     @Test

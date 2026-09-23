@@ -11,7 +11,6 @@ import io.github.tinkerlgd2026.agentscope.cls.internal.DeadlineBudget;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.LifecycleCoordinator;
 import io.github.tinkerlgd2026.agentscope.cls.internal.SinkLifecycleAdapter;
-import io.github.tinkerlgd2026.agentscope.cls.internal.SinkLifecycleAdapter;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
@@ -44,6 +43,7 @@ public final class ClsAgentObservability implements AutoCloseable {
     private final LifecycleCoordinator coordinator;
     private final Duration shutdownTimeout;
     private final ExecutorService lifecycleExecutor;
+    private final AtomicBoolean resourcesReleased = new AtomicBoolean();
 
     private ClsAgentObservability(
             SdkTracerProvider tracerProvider,
@@ -228,7 +228,7 @@ public final class ClsAgentObservability implements AutoCloseable {
             throw new IllegalArgumentException("flush timeout must not exceed 10 minutes");
         }
         boolean flushed = coordinator.flush(timeout);
-        if (!flushed) {
+        if (!flushed && coordinator.state() == LifecycleCoordinator.State.RUNNING) {
             counters.flushFailed(1);
         }
         return flushed;
@@ -246,6 +246,9 @@ public final class ClsAgentObservability implements AutoCloseable {
         if (timeout == null || timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("shutdown timeout must be positive");
         }
+        if (timeout.compareTo(MAX_FLUSH_TIMEOUT) > 0) {
+            throw new IllegalArgumentException("shutdown timeout must not exceed 10 minutes");
+        }
         boolean stopped = coordinator.shutdown(timeout);
         if (!stopped) {
             counters.shutdownFailed(1);
@@ -261,6 +264,9 @@ public final class ClsAgentObservability implements AutoCloseable {
     @Override
     public void close() {
         shutdown(shutdownTimeout);
+        if (!resourcesReleased.compareAndSet(false, true)) {
+            return;
+        }
         // shutdown() rather than shutdownNow(): a stuck single-flight flush keeps running on
         // the daemon pool and completes when its sink frees; interruption would falsify it.
         lifecycleExecutor.shutdown();

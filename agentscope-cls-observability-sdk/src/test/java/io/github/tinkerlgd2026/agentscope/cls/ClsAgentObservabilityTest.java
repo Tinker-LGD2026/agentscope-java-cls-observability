@@ -179,9 +179,11 @@ class ClsAgentObservabilityTest {
             // The shutdown chain waits for the in-flight flush only within its own absolute
             // deadline; it never invokes a second sink stage while the flush is stuck.
             closing.get(5, TimeUnit.SECONDS);
+            assertThat(sink.flushCalls.get()).isEqualTo(1);
             // The stuck flush keeps running independently and succeeds once the sink frees.
             sink.release.countDown();
             assertThat(flushing.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(sink.flushCalls.get()).isEqualTo(1);
         } finally {
             sink.release.countDown();
             executor.shutdownNow();
@@ -271,6 +273,8 @@ class ClsAgentObservabilityTest {
     private static final class BlockingFlushSink implements SpanSink {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final java.util.concurrent.atomic.AtomicInteger flushCalls =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
         public CompletionStage<Void> export(List<ClsSpanRecord> records) {
@@ -279,6 +283,7 @@ class ClsAgentObservabilityTest {
 
         @Override
         public CompletionStage<Boolean> flush(Duration timeout) {
+            flushCalls.incrementAndGet();
             entered.countDown();
             try {
                 release.await();

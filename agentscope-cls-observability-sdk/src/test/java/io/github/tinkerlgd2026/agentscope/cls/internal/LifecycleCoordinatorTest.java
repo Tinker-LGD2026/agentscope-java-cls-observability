@@ -158,7 +158,7 @@ class LifecycleCoordinatorTest {
         awaitCondition(() -> flushEntries.get() == 1);
         Future<Boolean> second = callers.submit(() -> coordinator.flush(TOTAL));
         // Both callers are parked on the same flight before it completes.
-        awaitCondition(() -> coordinator.flushWaiters() == 2);
+        awaitCondition(() -> coordinator.waiters() == 2);
         flushGate.complete(true);
 
         assertThat(first.get(5, TimeUnit.SECONDS)).isTrue();
@@ -175,7 +175,7 @@ class LifecycleCoordinatorTest {
         // Second caller joins with a shorter personal deadline.
         Future<Boolean> impatient =
                 callers.submit(() -> coordinator.flush(Duration.ofSeconds(30)));
-        awaitCondition(() -> coordinator.flushWaiters() == 2);
+        awaitCondition(() -> coordinator.waiters() == 2);
         // Its deadline expires while the shared flush keeps running.
         nanos.addAndGet(Duration.ofSeconds(50).toNanos());
         assertThat(impatient.get(5, TimeUnit.SECONDS)).isFalse();
@@ -334,7 +334,7 @@ class LifecycleCoordinatorTest {
         // A second shutdown only waits on the same flight: no repeated sink invocation.
         Future<Boolean> second =
                 callers.submit(() -> coordinator.shutdown(Duration.ofSeconds(30)));
-        awaitCondition(() -> coordinator.flushWaiters() == 1);
+        awaitCondition(() -> coordinator.waiters() == 1);
         nanos.addAndGet(Duration.ofSeconds(150).toNanos());
         assertThat(second.get(5, TimeUnit.SECONDS)).isFalse();
         assertThat(barrierEntries.get()).isEqualTo(1);
@@ -379,6 +379,66 @@ class LifecycleCoordinatorTest {
         assertThat(coordinator.shutdown(TOTAL)).isTrue();
         assertThat(barrierCalls.get()).isEqualTo(2);
         assertThat(stageOrder).contains("closeProvider");
+    }
+
+    @Test
+    void throwingStageFailsChainAndAllowsRetryFromCheckpoint() {
+        AtomicInteger barrierCalls = new AtomicInteger();
+        CompletableFuture<Boolean> open = CompletableFuture.completedFuture(true);
+        LifecycleCoordinator.ShutdownStages stages =
+                stages(
+                        instantStage("quiescence", true),
+                        () -> stageOrder.add("freeze"),
+                        gatedStage("flushProcessor", open),
+                        budget -> {
+                            stageOrder.add("sinkBarrier");
+                            if (barrierCalls.incrementAndGet() == 1) {
+                                throw new IllegalStateException("sink exploded");
+                            }
+                            return true;
+                        },
+                        instantStage("closeProvider", true));
+        LifecycleCoordinator coordinator = coordinator(stages);
+
+        // The throwing stage fails the chain into CLOSE_FAILED instead of wedging DRAINING.
+        assertThat(coordinator.shutdown(TOTAL)).isFalse();
+        awaitCondition(
+                () -> coordinator.state() == LifecycleCoordinator.State.CLOSE_FAILED);
+        assertThat(stageOrder).doesNotContain("closeProvider");
+
+        // Retry resumes at the failed stage and completes.
+        assertThat(coordinator.shutdown(TOTAL)).isTrue();
+        assertThat(barrierCalls.get()).isEqualTo(2);
+        assertThat(stageOrder).contains("closeProvider");
+    }
+
+    @Test
+    void rejectedChainSubmissionFailsClosedInsteadOfWedging() {
+        LifecycleCoordinator coordinator = coordinator(happyStages());
+        executor.shutdownNow(); // every submission is rejected from here on
+
+        assertThat(coordinator.shutdown(TOTAL)).isFalse();
+        assertThat(coordinator.state()).isEqualTo(LifecycleCoordinator.State.CLOSE_FAILED);
+        // Retry is also rejected but never wedges: it fails fast again.
+        assertThat(coordinator.shutdown(TOTAL)).isFalse();
+        assertThat(coordinator.state()).isEqualTo(LifecycleCoordinator.State.CLOSE_FAILED);
+    }
+
+    @Test
+    void racingFlushCallersShareOneFlight() throws Exception {
+        LifecycleCoordinator coordinator = coordinator(happyStages());
+        int callerCount = 8;
+        List<Future<Boolean>> results = new java.util.ArrayList<>();
+        for (int index = 0; index < callerCount; index++) {
+            results.add(callers.submit(() -> coordinator.flush(TOTAL)));
+        }
+        awaitCondition(() -> coordinator.waiters() == callerCount);
+        flushGate.complete(true);
+
+        for (Future<Boolean> result : results) {
+            assertThat(result.get(5, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(flushEntries.get()).isEqualTo(1);
     }
 
     @Test

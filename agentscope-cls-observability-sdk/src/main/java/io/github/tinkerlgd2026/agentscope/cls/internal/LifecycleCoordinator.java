@@ -59,7 +59,7 @@ public final class LifecycleCoordinator {
     private final ShutdownStages stages;
     private final LongSupplier ticker;
     private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
-    private final AtomicInteger flushWaiters = new AtomicInteger();
+    private final AtomicInteger waiters = new AtomicInteger();
     private final AtomicReference<FlushFlight> flushFlight = new AtomicReference<>();
     private final AtomicReference<ShutdownFlight> shutdownFlight = new AtomicReference<>();
 
@@ -79,7 +79,8 @@ public final class LifecycleCoordinator {
         this.ticker = Objects.requireNonNull(ticker, "ticker");
     }
 
-    State state() {
+    /** Current lifecycle state (read-only view for the facade and tests). */
+    public State state() {
         return state.get();
     }
 
@@ -104,6 +105,13 @@ public final class LifecycleCoordinator {
                 flight = flushFlight.get();
             } else {
                 flight = created;
+                if (state.get() != State.RUNNING) {
+                    // DRAINING won the race after our state check: withdraw the flight so the
+                    // flush never runs concurrently with the shutdown chain.
+                    flushFlight.compareAndSet(created, null);
+                    created.outcome.complete(false);
+                    return false;
+                }
                 // The shared operation keeps the first caller's timeout as its internal
                 // deadline; later callers never widen or shrink it.
                 DeadlineBudget operationBudget = DeadlineBudget.start(callerTimeout, ticker);
@@ -131,6 +139,7 @@ public final class LifecycleCoordinator {
             flight = shutdownFlight.get();
             if (flight == null) {
                 if (!state.compareAndSet(State.RUNNING, State.DRAINING)) {
+                    java.util.concurrent.locks.LockSupport.parkNanos(100_000L);
                     continue;
                 }
                 ShutdownFlight created = new ShutdownFlight();
@@ -150,6 +159,7 @@ public final class LifecycleCoordinator {
                     flight = resumed;
                     break;
                 }
+                java.util.concurrent.locks.LockSupport.parkNanos(100_000L);
                 continue;
             }
             break;
@@ -158,16 +168,29 @@ public final class LifecycleCoordinator {
     }
 
     private void submitChain(ShutdownFlight flight, int fromStage, Duration timeout) {
-        submit(
-                flight.outcome,
-                () -> {
-                    boolean ok = runChain(flight, fromStage, timeout);
-                    flight.completed = true;
-                    return ok;
-                });
+        boolean submitted =
+                submit(
+                        flight.outcome,
+                        () -> {
+                            try {
+                                return runChain(flight, fromStage, timeout);
+                            } catch (RuntimeException | Error failure) {
+                                // A throwing stage must fail the chain into CLOSE_FAILED so a
+                                // later shutdown can resume from the checkpoint.
+                                return fail(flight, flight.checkpoint.get());
+                            } finally {
+                                flight.completed = true;
+                            }
+                        });
+        if (!submitted) {
+            // I-2: a rejected shutdown chain still settles the state machine.
+            flight.completed = true;
+            complete(flight, false);
+        }
     }
 
-    private void submit(CompletableFuture<Boolean> outcome, BooleanSupplier task) {
+    /** Returns false when the executor rejected the task (outcome completed false). */
+    private boolean submit(CompletableFuture<Boolean> outcome, BooleanSupplier task) {
         try {
             executor.submit(
                     () -> {
@@ -179,8 +202,10 @@ public final class LifecycleCoordinator {
                         }
                         outcome.complete(ok);
                     });
+            return true;
         } catch (RejectedExecutionException rejection) {
             outcome.complete(false);
+            return false;
         }
     }
 
@@ -189,9 +214,9 @@ public final class LifecycleCoordinator {
         DeadlineBudget absolute = DeadlineBudget.start(timeout, ticker);
         long startNanos = absolute.deadlineNanos() - timeout.toNanos();
         long totalNanos = timeout.toNanos();
-        long m40 = startNanos + totalNanos * 2 / 5;
-        long m65 = startNanos + totalNanos * 13 / 20;
-        long m85 = startNanos + totalNanos * 17 / 20;
+        long m40 = startNanos + totalNanos / 5 * 2;
+        long m65 = startNanos + totalNanos / 20 * 13;
+        long m85 = startNanos + totalNanos / 20 * 17;
         long m100 = absolute.deadlineNanos();
 
         int step = fromStage;
@@ -264,17 +289,22 @@ public final class LifecycleCoordinator {
         if (active == null) {
             return true;
         }
-        long millis = cap.remaining().toMillis();
-        try {
-            active.outcome.get(Math.max(1L, millis), TimeUnit.MILLISECONDS);
-            return true;
-        } catch (TimeoutException timeout) {
-            return false;
-        } catch (InterruptedException interruption) {
-            Thread.currentThread().interrupt();
-            return false;
-        } catch (ExecutionException failure) {
-            return true; // completed with failure: the sink is free
+        while (true) {
+            long millis = cap.remaining().toMillis();
+            if (millis <= 0) {
+                return false;
+            }
+            try {
+                active.outcome.get(Math.min(10L, millis), TimeUnit.MILLISECONDS);
+                return true;
+            } catch (TimeoutException slice) {
+                // Re-evaluate the stage cap.
+            } catch (InterruptedException interruption) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (ExecutionException failure) {
+                return true; // completed with failure: the sink is free
+            }
         }
     }
 
@@ -293,7 +323,7 @@ public final class LifecycleCoordinator {
      */
     private boolean await(CompletableFuture<Boolean> outcome, Duration callerTimeout) {
         DeadlineBudget wait = DeadlineBudget.start(callerTimeout, ticker);
-        flushWaiters.incrementAndGet();
+        waiters.incrementAndGet();
         try {
             while (true) {
                 long millis = wait.remaining().toMillis();
@@ -314,13 +344,13 @@ public final class LifecycleCoordinator {
                 }
             }
         } finally {
-            flushWaiters.decrementAndGet();
+            waiters.decrementAndGet();
         }
     }
 
     /** Visible for tests: callers currently waiting on a shared operation. */
-    int flushWaiters() {
-        return flushWaiters.get();
+    int waiters() {
+        return waiters.get();
     }
 
     private static void requirePositive(Duration timeout) {

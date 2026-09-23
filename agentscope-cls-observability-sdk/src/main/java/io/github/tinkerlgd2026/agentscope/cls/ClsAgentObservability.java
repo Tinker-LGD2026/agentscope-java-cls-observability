@@ -2,7 +2,9 @@ package io.github.tinkerlgd2026.agentscope.cls;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.middleware.MiddlewareBase;
-import io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.ClsBatchSpanProcessor;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.EncodedSpanQueue;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.SpanRecordExporter;
 import io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware;
 import io.github.tinkerlgd2026.agentscope.cls.internal.CaptureMemoryPool;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
@@ -17,7 +19,6 @@ import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport
 import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.Objects;
@@ -39,7 +40,7 @@ public final class ClsAgentObservability implements AutoCloseable {
     private static final Duration MAX_FLUSH_TIMEOUT = Duration.ofMinutes(10);
 
     private final SdkTracerProvider tracerProvider;
-    private final ClsSpanExporter exporter;
+    private final ClsBatchSpanProcessor processor;
     private final MiddlewareBase middleware;
     private final TelemetryCounters counters;
     private final ExecutorService lifecycleExecutor =
@@ -55,11 +56,11 @@ public final class ClsAgentObservability implements AutoCloseable {
 
     private ClsAgentObservability(
             SdkTracerProvider tracerProvider,
-            ClsSpanExporter exporter,
+            ClsBatchSpanProcessor processor,
             MiddlewareBase middleware,
             TelemetryCounters counters) {
         this.tracerProvider = tracerProvider;
-        this.exporter = exporter;
+        this.processor = processor;
         this.middleware = middleware;
         this.counters = counters;
     }
@@ -88,12 +89,25 @@ public final class ClsAgentObservability implements AutoCloseable {
             throw new IllegalArgumentException("config and sink are required");
         }
         TelemetryCounters counters = new TelemetryCounters();
-        ClsSpanExporter exporter =
-                new ClsSpanExporter(
-                        new ClsSpanEncoder(objectMapper),
+        CaptureMemoryPool memoryPool = new CaptureMemoryPool(config.maxCaptureMemoryBytes());
+        EncodedSpanQueue queue = new EncodedSpanQueue(memoryPool, config.maxQueueSize());
+        ClsBatchSpanProcessor spanProcessor =
+                new ClsBatchSpanProcessor(
+                        new ClsSpanEncoder(objectMapper, config.maxContentBytes()),
                         new ClsSpanValidator(objectMapper),
-                        sink,
-                        counters);
+                        queue,
+                        new SpanRecordExporter(sink, counters),
+                        counters,
+                        Objects.requireNonNull(config.exportScheduleDelay()),
+                        Math.max(64, Math.min(256, config.maxQueueSize() / 8)),
+                        config.maxExportBatchBytes(),
+                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                                runnable -> {
+                                    Thread thread =
+                                            new Thread(runnable, "agentscope-cls-export");
+                                    thread.setDaemon(true);
+                                    return thread;
+                                }));
         var resource =
                 Resource.builder()
                         .put("service.name", Objects.requireNonNull(config.serviceName()))
@@ -102,13 +116,6 @@ public final class ClsAgentObservability implements AutoCloseable {
         if (deploymentEnvironment != null) {
             resource.put("deployment.environment.name", deploymentEnvironment);
         }
-        var spanProcessor =
-                BatchSpanProcessor.builder(exporter)
-                        .setScheduleDelay(Objects.requireNonNull(config.exportScheduleDelay()))
-                        .setMaxQueueSize(config.maxQueueSize())
-                        .setMaxExportBatchSize(
-                                Math.max(64, Math.min(256, config.maxQueueSize() / 8)))
-                        .build();
         SdkTracerProvider provider =
                 SdkTracerProvider.builder()
                         .setResource(Objects.requireNonNull(resource.build()))
@@ -132,14 +139,14 @@ public final class ClsAgentObservability implements AutoCloseable {
                         config.providerPayloadCaptureMode(),
                         config.truncatePreviewBytes(),
                         config.maxContentBytes(),
-                        new CaptureMemoryPool(config.maxCaptureMemoryBytes()),
+                        memoryPool,
                         config.maxInvocationCaptureMemoryBytes(),
                         active::get,
                         counters,
                         objectMapper,
                         config.reactorContextHookEnabled());
         return new ClsAgentObservability(
-                provider, exporter, new LifecycleMiddleware(middleware, active), counters);
+                provider, spanProcessor, new LifecycleMiddleware(middleware, active), counters);
     }
 
     public MiddlewareBase middleware() {
@@ -159,26 +166,19 @@ public final class ClsAgentObservability implements AutoCloseable {
         long deadline = System.nanoTime() + timeout.toNanos();
         Future<?> flushTask = null;
         try {
-            exporter.prepareFlush(timeout);
-            var providerResult = tracerProvider.forceFlush();
-            providerResult.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            if (!providerResult.isSuccess() || closed.get()) {
-                counters.exportFailed(1);
-                return false;
-            }
-            Duration remaining = Duration.ofNanos(Math.max(1L, deadline - System.nanoTime()));
-            exporter.prepareFlush(remaining);
-            Future<io.opentelemetry.sdk.common.CompletableResultCode> sinkFlushTask =
-                    lifecycleExecutor.submit(exporter::flush);
-            flushTask = sinkFlushTask;
+            processor.prepareFlush(timeout);
+            Future<io.opentelemetry.sdk.common.CompletableResultCode> providerFlushTask =
+                    lifecycleExecutor.submit(tracerProvider::forceFlush);
+            flushTask = providerFlushTask;
             activeLifecycleTask.set(flushTask);
             if (closed.get()) {
                 flushTask.cancel(true);
                 return false;
             }
-            var sinkResult = sinkFlushTask.get(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            sinkResult.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            if (!sinkResult.isSuccess()) {
+            var providerResult =
+                    providerFlushTask.get(remainingMillis(deadline), TimeUnit.MILLISECONDS);
+            providerResult.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
+            if (!providerResult.isSuccess() || closed.get()) {
                 counters.exportFailed(1);
                 return false;
             }

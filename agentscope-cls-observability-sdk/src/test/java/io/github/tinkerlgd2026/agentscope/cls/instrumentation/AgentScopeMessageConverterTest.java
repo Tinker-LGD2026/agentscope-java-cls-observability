@@ -2,10 +2,14 @@ package io.github.tinkerlgd2026.agentscope.cls.instrumentation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.agentscope.core.message.DataBlock;
+import io.agentscope.core.message.HintBlock;
+import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ThinkingBlock;
+import io.agentscope.core.message.URLSource;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import java.util.List;
@@ -59,6 +63,38 @@ class AgentScopeMessageConverterTest {
         assertThat(converted.complete()).isFalse();
         assertThat(value).contains("final-answer", "call-final", "search");
         assertThat(value.length()).isLessThan(10_000);
+    }
+
+    @Test
+    void providerOffSemanticMediaDataAndHintExposeOnlyType() {
+        Msg message =
+                Msg.builder()
+                        .role(MsgRole.ASSISTANT)
+                        .content(
+                                List.of(
+                                        new ImageBlock(
+                                                new URLSource(
+                                                        "https://user:pass@example.test/private?token=x")),
+                                        DataBlock.builder()
+                                                .id("private-id")
+                                                .name("private-name")
+                                                .source(new URLSource("https://example.test/data"))
+                                                .build(),
+                                        new HintBlock("private-hint-id", "private-hint", "private-source")))
+                        .build();
+
+        String converted =
+                new AgentScopeMessageConverter().convert(List.of(message)).toString();
+
+        assertThat(converted)
+                .contains("{type=image}", "{type=data}", "{type=hint}")
+                .doesNotContain(
+                        "user:pass",
+                        "token=x",
+                        "private-id",
+                        "private-name",
+                        "private-hint",
+                        "private-source");
     }
 
     @Test

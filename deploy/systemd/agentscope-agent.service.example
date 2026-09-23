@@ -12,7 +12,7 @@ EnvironmentFile=/etc/agent-app/cls.env
 ExecStart=/usr/bin/java -jar /opt/agent-app/app.jar
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=30
+TimeoutStopSec=60
 SuccessExitStatus=143
 
 NoNewPrivileges=true

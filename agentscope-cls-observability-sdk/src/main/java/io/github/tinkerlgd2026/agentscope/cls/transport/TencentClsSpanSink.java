@@ -4,6 +4,7 @@ import com.tencentcloudapi.cls.producer.Result;
 import com.tencentcloudapi.cls.producer.common.LogItem;
 import io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -18,6 +19,7 @@ public final class TencentClsSpanSink implements SpanSink {
     private final String topicId;
     private final ClsAsyncTransport transport;
     private final Duration exportTimeout;
+    private final TencentExportBatchPlanner batchPlanner;
     private final Object lifecycleLock = new Object();
     private final Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -27,18 +29,32 @@ public final class TencentClsSpanSink implements SpanSink {
     }
 
     TencentClsSpanSink(String topicId, ClsAsyncTransport transport, Duration exportTimeout) {
+        this(
+                topicId,
+                transport,
+                exportTimeout,
+                new TencentExportBatchPlanner(4 * 1024 * 1024, 256));
+    }
+
+    public TencentClsSpanSink(
+            String topicId,
+            ClsAsyncTransport transport,
+            Duration exportTimeout,
+            TencentExportBatchPlanner batchPlanner) {
         if (topicId == null
                 || topicId.isBlank()
                 || transport == null
                 || exportTimeout == null
                 || exportTimeout.isNegative()
-                || exportTimeout.isZero()) {
+                || exportTimeout.isZero()
+                || batchPlanner == null) {
             throw new IllegalArgumentException(
-                    "topicId, transport and positive exportTimeout are required");
+                    "topicId, transport, positive exportTimeout and batchPlanner are required");
         }
         this.topicId = topicId;
         this.transport = transport;
         this.exportTimeout = exportTimeout;
+        this.batchPlanner = batchPlanner;
     }
 
     @Override
@@ -47,6 +63,7 @@ public final class TencentClsSpanSink implements SpanSink {
             return CompletableFuture.completedFuture(null);
         }
         List<LogItem> items = records.stream().map(TencentClsSpanSink::toLogItem).toList();
+        List<List<LogItem>> slices = batchPlanner.slice(items);
         CompletableFuture<Void> completion = new CompletableFuture<>();
         synchronized (lifecycleLock) {
             if (closed.get()) {
@@ -54,23 +71,40 @@ public final class TencentClsSpanSink implements SpanSink {
             }
             pending.add(completion);
         }
+        // All slices of one export share a single absolute deadline.
         completion.orTimeout(exportTimeout.toMillis(), TimeUnit.MILLISECONDS);
         completion.whenComplete((ignored, error) -> pending.remove(completion));
-        try {
-            transport.putLogs(topicId, items)
-                    .whenComplete(
-                            (result, error) -> {
-                                if (error != null) {
-                                    completion.completeExceptionally(error);
-                                } else if (result != null && result.isSuccessful()) {
-                                    completion.complete(null);
-                                } else {
-                                    completion.completeExceptionally(exportFailure(result));
-                                }
-                            });
-        } catch (RuntimeException exception) {
-            completion.completeExceptionally(exception);
+        List<CompletableFuture<Void>> sliceResults = new ArrayList<>(slices.size());
+        for (List<LogItem> slice : slices) {
+            CompletableFuture<Void> sliceResult = new CompletableFuture<>();
+            sliceResults.add(sliceResult);
+            try {
+                transport
+                        .putLogs(topicId, slice)
+                        .whenComplete(
+                                (result, error) -> {
+                                    if (error != null) {
+                                        sliceResult.completeExceptionally(error);
+                                    } else if (result != null && result.isSuccessful()) {
+                                        sliceResult.complete(null);
+                                    } else {
+                                        sliceResult.completeExceptionally(exportFailure(result));
+                                    }
+                                });
+            } catch (RuntimeException exception) {
+                sliceResult.completeExceptionally(exception);
+            }
         }
+        CompletableFuture
+                .allOf(sliceResults.toArray(CompletableFuture[]::new))
+                .whenComplete(
+                        (ignored, error) -> {
+                            if (error == null) {
+                                completion.complete(null);
+                            } else {
+                                completion.completeExceptionally(error);
+                            }
+                        });
         return completion;
     }
 

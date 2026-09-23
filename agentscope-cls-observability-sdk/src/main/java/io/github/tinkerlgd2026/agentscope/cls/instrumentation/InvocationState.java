@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.jspecify.annotations.Nullable;
 
 final class InvocationState {
@@ -22,6 +23,14 @@ final class InvocationState {
     private final String entryType;
     private final ConcurrentHashMap<String, AtomicInteger> rounds = new ConcurrentHashMap<>();
     private volatile @Nullable Span entrySpan;
+    private final ProviderModelSummary providerModelSummary = new ProviderModelSummary();
+    private final ToolRegistry toolRegistry = new ToolRegistry();
+    private final AtomicReference<Generation> currentGeneration = new AtomicReference<>();
+    private volatile @Nullable Context firstAgentContext;
+    private volatile @Nullable InvocationLease lease;
+    private volatile @Nullable ControlEventTracker controlTracker;
+    private volatile @Nullable InvocationCaptureBudget controlBudget;
+    private volatile @Nullable String resumeFromTurnId;
 
     InvocationState(
             String sessionId,
@@ -66,11 +75,122 @@ final class InvocationState {
         entrySpan = value;
     }
 
-    void recordProvider(String provider) {
-        Span current = entrySpan;
-        if (current != null) {
-            current.setAttribute("gen_ai.provider.name", provider);
+    void bindLease(InvocationLease newLease) {
+        lease = newLease;
+    }
+
+    ProviderModelSummary providerModelSummary() {
+        return providerModelSummary;
+    }
+
+    ToolRegistry toolRegistry() {
+        return toolRegistry;
+    }
+
+    /** The currently live generation; swapped atomically on timeout rotation. */
+    @Nullable Generation generation() {
+        return currentGeneration.get();
+    }
+
+    void generation(Generation next) {
+        currentGeneration.set(Objects.requireNonNull(next, "next generation"));
+    }
+
+    /** The first generation's agent context, used to detect stale reactor contexts. */
+    @Nullable Context firstAgentContext() {
+        return firstAgentContext;
+    }
+
+    void firstAgentContext(Context context) {
+        firstAgentContext = context;
+    }
+
+    /**
+     * Live span-tree handles of one generation. Terminal callbacks always resolve the current
+     * generation instead of capturing spans at assembly time, so a timeout rotation can start a
+     * fresh turn/trace without disturbing the finished one.
+     */
+    static final class Generation {
+        private final InvocationLifecycle lifecycle;
+        private final String turnId;
+        private final @Nullable Span entrySpan;
+        private final Span agentSpan;
+        private final AgentFrame agentFrame;
+        private final Context agentContext;
+        private final AtomicBoolean ended = new AtomicBoolean();
+
+        Generation(
+                InvocationLifecycle lifecycle,
+                String turnId,
+                @Nullable Span entrySpan,
+                Span agentSpan,
+                AgentFrame agentFrame,
+                Context agentContext) {
+            this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
+            this.turnId = Objects.requireNonNull(turnId, "turnId");
+            this.entrySpan = entrySpan;
+            this.agentSpan = Objects.requireNonNull(agentSpan, "agentSpan");
+            this.agentFrame = Objects.requireNonNull(agentFrame, "agentFrame");
+            this.agentContext = Objects.requireNonNull(agentContext, "agentContext");
         }
+
+        InvocationLifecycle lifecycle() {
+            return lifecycle;
+        }
+
+        String turnId() {
+            return turnId;
+        }
+
+        @Nullable Span entrySpan() {
+            return entrySpan;
+        }
+
+        Span agentSpan() {
+            return agentSpan;
+        }
+
+        AgentFrame agentFrame() {
+            return agentFrame;
+        }
+
+        /** Parent context for this generation's nested step/chat/tool spans. */
+        Context agentContext() {
+            return agentContext;
+        }
+
+        AtomicBoolean ended() {
+            return ended;
+        }
+    }
+
+    void bindControlPlane(
+            InvocationLease newLease,
+            ControlEventTracker tracker,
+            InvocationCaptureBudget budget) {
+        lease = newLease;
+        controlTracker = tracker;
+        controlBudget = budget;
+    }
+
+    @Nullable InvocationCaptureBudget controlBudget() {
+        return controlBudget;
+    }
+
+    @Nullable InvocationLease lease() {
+        return lease;
+    }
+
+    @Nullable ControlEventTracker controlTracker() {
+        return controlTracker;
+    }
+
+    void resumeFromTurnId(@Nullable String value) {
+        resumeFromTurnId = value;
+    }
+
+    @Nullable String resumeFromTurnId() {
+        return resumeFromTurnId;
     }
 
     AgentFrame newAgentFrame(String configuredId, String name) {
@@ -242,14 +362,18 @@ final class InvocationState {
                     current.setAttribute("gen_ai.react.finish_reason", reason);
                     current.setAttribute("error.type", errorType);
                     current.setStatus(StatusCode.ERROR, Objects.requireNonNull(reason));
-                    current.addEvent(
-                            "exception",
-                            Objects.requireNonNull(
-                                    Attributes.builder()
-                                            .put(
-                                                    "exception.type",
-                                                    Objects.requireNonNull(errorType))
-                                            .build()));
+                    // Exception events are only recorded for a real Throwable; controlled
+                    // terminations like cancellation never fabricate one.
+                    if (error != null) {
+                        current.addEvent(
+                                "exception",
+                                Objects.requireNonNull(
+                                        Attributes.builder()
+                                                .put(
+                                                        "exception.type",
+                                                        Objects.requireNonNull(errorType))
+                                                .build()));
+                    }
                 } finally {
                     current.end();
                 }

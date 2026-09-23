@@ -70,7 +70,7 @@ cd agentscope-java-cls-observability
 <dependency>
     <groupId>io.github.tinkerlgd2026</groupId>
     <artifactId>agentscope-cls-observability-sdk</artifactId>
-    <version>0.1.0</version>
+    <version>0.3.0-SNAPSHOT</version>
 </dependency>
 
 <!-- SDK 将 AgentScope 声明为 provided，宿主应用必须显式提供 -->
@@ -341,10 +341,23 @@ SDK 使用独立的 `SdkTracerProvider`，不替换宿主 `GlobalOpenTelemetry`�
 | `CLS_DEPLOYMENT_ENVIRONMENT` | 无 | 如 `production` / `staging` |
 | `CLS_CONTENT_CAPTURE` | `off` | 普通正文和工具内容：`off` / `hash` / `truncate` / `full` |
 | `CLS_REASONING_CAPTURE` | `off` | 模型推理正文独立策略：`off` / `hash` / `truncate` / `full` |
-| `CLS_MAX_CONTENT_BYTES` | `1100000` | 单个正文 Attribute 的字节上限，范围 256–1100000 |
+| `CLS_PROVIDER_PAYLOAD_CAPTURE` | `off` | Provider 原始载荷独立策略：`off` / `hash` / `truncate` / `full` |
+| `CLS_MAX_CONTENT_BYTES` | `950000` | 单个正文 Attribute 的 UTF-8 字节上限，范围 256–1000000 |
+| `CLS_TRUNCATE_PREVIEW_BYTES` | `4096` | `truncate` 预览字节上限，范围 256–65536 |
 | `CLS_EXPORT_SCHEDULE_DELAY_MS` | `2000` | 批量导出间隔，范围 50–60000 |
-| `CLS_MAX_QUEUE_SIZE` | `4096` | 内存队列 Span 数，范围 256–65536 |
-| `CLS_REACTOR_CONTEXT_HOOK` | `false` | 是否启用进程级 OTel Reactor Hook |
+| `CLS_MAX_QUEUE_SIZE` | `4096` | 已编码 Span 队列条数，范围 256–65536 |
+| `CLS_MAX_EXPORT_BATCH_BYTES` | `4194304` | 单次 CLS 提交字节上限，范围 2097152–4718592 |
+| `CLS_MAX_EXPORT_BATCH_COUNT` | `256` | 单次导出 Span 条数上限，范围 1–10000 |
+| `CLS_PRODUCER_LINGER_MS` | `200` | Producer 批次滞留，范围 100–5000 |
+| `CLS_MAX_PRODUCER_BUFFER_BYTES` | `67108864` | Producer 总缓冲，范围 1048576–1073741824 |
+| `CLS_EXPORT_TIMEOUT_MS` | `30000` | 单次导出总超时，范围 1000–600000 |
+| `CLS_SHUTDOWN_TIMEOUT_MS` | `45000` | 优雅关闭总预算，范围 1000–600000 |
+| `CLS_HITL_WAIT_TIMEOUT_MS` | `600000` | 单次 HITL/外部执行等待上限，范围 1000–86400000 |
+| `CLS_MAX_CAPTURE_MEMORY_BYTES` | `67108864` | SDK 采集内存总池，范围 8 MiB–1 GiB |
+| `CLS_MAX_INVOCATION_CAPTURE_MEMORY_BYTES` | `8388608` | 单次调用采集内存上限，范围 1–256 MiB |
+| `CLS_REACTOR_CONTEXT_MODE` | `private` | Reactor 上下文模式：`private` / `bridge` / `legacy_hook` |
+| `CLS_REACTOR_CONTEXT_HOOK` | 无 | 已弃用；映射到 `private`（false）或 `legacy_hook`（true） |
+| `CLS_HOST_TRACE_LINK_ENABLED` | `true` | 宿主 Span 存在时 CLS Entry 以 Link 关联、Trace 仍独立 |
 
 完整说明见 [`docs/configuration.md`](docs/configuration.md)。
 
@@ -368,7 +381,8 @@ SDK 使用独立的 `SdkTracerProvider`，不替换宿主 `GlobalOpenTelemetry`�
 ```bash
 export CLS_CONTENT_CAPTURE=truncate
 export CLS_REASONING_CAPTURE=off
-export CLS_REACTOR_CONTEXT_HOOK=false
+export CLS_PROVIDER_PAYLOAD_CAPTURE=off
+export CLS_REACTOR_CONTEXT_MODE=private
 ```
 
 重要边界：
@@ -378,7 +392,7 @@ export CLS_REACTOR_CONTEXT_HOOK=false
 - 普通正文 `off` 不上传消息正文和工具参数/结果，但 Chat Span 仍包含稳定、无盐的输入消息 SHA-256；低熵内容可能被字典推断。如果合规要求禁止任何普通内容派生值，需要在接入前评估。
 - `hash` 不是加密；它用于关联相同内容。
 - `truncate/full` 会上传脱敏后的正文；脱敏只能降低风险，不能保证识别所有业务秘密和个人数据。
-- `full` 仍受单字段 1.1 MB 硬上限保护。
+- `full` 仍受单字段 1,000,000 UTF-8 bytes 硬上限保护。
 - `sessionId`、`userId`、`userName` 和 `host.name` 也属于需要纳入数据治理的标识信息。
 - SDK 不采集 cwd、Git 仓库、分支、Remote 或提交信息。
 - SDK 不生成不可靠的 `gen_ai.input.messages_delta`。
@@ -387,11 +401,11 @@ export CLS_REACTOR_CONTEXT_HOOK=false
 
 ## 性能、故障隔离与限制
 
-- Span 在内存队列中异步批量导出；默认队列 4096，批量上限 256，调度间隔 2 秒。
-- 遥测构建、序列化、上传、flush 和 close 失败不会替换 Agent 业务返回值。
+- Span 在结束时同步编码为有界记录，经内置字节感知 processor 批量导出；默认队列 4096 条，单批上限 256 条 / 4 MiB，调度间隔 2 秒。
+- 遥测构建、序列化、上传、flush、shutdown 和 close 失败不会替换 Agent 业务返回值。
 - 非法 Span 逐条隔离，不丢弃同批其他合法 Span。
 - 队列不是持久队列；进程崩溃、强制终止、队列溢出或 flush 超时可能丢失尾部数据。
-- SDK 的 `droppedSpans` 不包含 OTel `BatchSpanProcessor` 内部队列丢弃，因为上游没有逐条回调。
+- SDK 的 `droppedSpans` 包含队列容量与内存 reservation 溢出；`detailedSnapshot()` 提供细分计数与活跃/等待 gauge。
 - 本 SDK 不应作为审计日志、财务计费或强一致事件系统。
 - 同一个 Agent 不要再注册 AgentScope 内置 `OtelTracingMiddleware` 或旧 `TelemetryTracer`。
 

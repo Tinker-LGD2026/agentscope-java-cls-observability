@@ -54,6 +54,23 @@ Hash 是稳定、无盐 SHA-256：
 - `truncate/full` 只采集 `ThinkingBlock.getThinking()`，仍执行脱敏和硬预算；
 - signature、thought signature、encrypted/redacted reasoning 和 `ThinkingBlock.metadata` 永不进入 Span。
 
+## Provider 载荷与 Opaque 内容
+
+`CLS_PROVIDER_PAYLOAD_CAPTURE` 默认 `off`。开启前必须理解：
+
+- `full` 可原样（有界）采集 signature/encrypted/base64 等不透明内容，SDK 无法检查密文内部
+  是否含凭据；
+- `truncate` 可能暴露不透明值的有界前缀；
+- `hash` 对低熵不透明值存在字典推断风险；
+- 三种模式均为显式 opt-in，不构成 DLP 替代品。
+
+可识别明文凭据执行 best-effort 脱敏；改名、自由文本或密文中的秘密可能无法识别。
+
+## Source IP
+
+CLS Producer 上报的日志会携带宿主 egress 的 source IP（CLS 服务端记录）。该值可用于区分
+上报来源主机，但不等于经过验证的客户端身份；接入方应将其纳入网络与访问控制评估。
+
 ## 脱敏能力
 
 `truncate/full` 会处理：
@@ -62,7 +79,7 @@ Hash 是稳定、无盐 SHA-256：
 - PEM 私钥、`AKID`、`sk-`、Bearer Token、JWT、常见键值密钥形态；
 - URL userinfo、query、fragment；
 - 超过 32 层的嵌套对象；
-- 超过单字段 1.1 MB 的正文。
+- 超过单字段 1,000,000 UTF-8 bytes 的正文。
 
 限制：
 
@@ -75,7 +92,7 @@ Hash 是稳定、无盐 SHA-256：
 必须：
 
 - 使用 CAM 子账号和最小权限；
-- 优先使用短期凭证；
+- 优先使用短期凭证（临时凭证过期后 SDK 不会自动刷新，需要重启或重建 SDK 实例）；
 - 通过环境变量、Secret Manager、systemd EnvironmentFile 或 Kubernetes Secret 注入；
 - 创建 SDK 后调用 `config.destroyCredentials()` 清除配置对象副本；
 - 定期轮换；

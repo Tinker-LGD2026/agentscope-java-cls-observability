@@ -193,7 +193,7 @@ public final class TravelPlannerApplication {
                 .build();
     }
 
-    private static ModelResources createModel(String apiKey, boolean reasoningEnabled) {
+    static ModelResources createModel(String apiKey, boolean reasoningEnabled) {
         HttpTransport transport = JdkHttpTransport.builder().build();
         try {
             Model model =
@@ -214,8 +214,8 @@ public final class TravelPlannerApplication {
         }
     }
 
-    private record ModelResources(Model model, HttpTransport transport) implements AutoCloseable {
-        private ModelResources {
+    record ModelResources(Model model, HttpTransport transport) implements AutoCloseable {
+        ModelResources {
             Objects.requireNonNull(model, "model");
             Objects.requireNonNull(transport, "transport");
         }

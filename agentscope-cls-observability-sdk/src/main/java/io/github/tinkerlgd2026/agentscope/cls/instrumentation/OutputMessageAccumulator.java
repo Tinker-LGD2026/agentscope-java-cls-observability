@@ -17,13 +17,12 @@ import io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,10 +50,14 @@ final class OutputMessageAccumulator {
     private final Map<BlockKey, StreamPart> reasoningBlocks = new LinkedHashMap<>();
     private final Map<BlockKey, ToolPart> toolCalls = new LinkedHashMap<>();
     private final Map<BlockKey, PartKind> lifecycleTypes = new LinkedHashMap<>();
+    private final Map<BlockKey, PartKind> rejectedLifecycleTypes = new LinkedHashMap<>();
     private final PayloadBudget reasoningPayloadBudget;
     private final PayloadBudget textPayloadBudget;
     private final PayloadBudget toolPayloadBudget;
     private long malformedEvents;
+    private long capacityDroppedParts;
+    private long capacityDroppedBytes;
+    private boolean reasoningCapacityTruncated;
     private long firstReasoningDeltaNanos = -1;
     private long firstTextDeltaNanos = -1;
     private Result completed;
@@ -70,9 +73,12 @@ final class OutputMessageAccumulator {
         this.contentMode = Objects.requireNonNull(contentMode, "contentMode");
         this.reasoningMode = Objects.requireNonNull(reasoningMode, "reasoningMode");
         this.maxBytes = maxBytes;
-        this.reasoningPayloadBudget = new PayloadBudget(maxBytes);
-        this.textPayloadBudget = new PayloadBudget(maxBytes);
-        this.toolPayloadBudget = new PayloadBudget(maxBytes);
+        int reasoningBytes = maxBytes / 4;
+        int toolBytes = maxBytes / 4;
+        int textBytes = maxBytes - reasoningBytes - toolBytes;
+        this.reasoningPayloadBudget = new PayloadBudget(reasoningBytes);
+        this.textPayloadBudget = new PayloadBudget(textBytes);
+        this.toolPayloadBudget = new PayloadBudget(toolBytes);
     }
 
     synchronized void accept(AgentEvent event, long elapsedNanos) {
@@ -111,25 +117,11 @@ final class OutputMessageAccumulator {
         textBlocks.values().forEach(part -> part.close(elapsedNanos));
         toolCalls.values().forEach(ToolPart::close);
         List<Map<String, Object>> parts = outputParts(false);
-        if (encodedLength(parts) > maxBytes && hasVisibleReasoning(parts)) {
-            reasoningBlocks.values().forEach(StreamPart::forceHash);
-            parts = outputParts(true);
-        }
-        if (encodedLength(parts) > maxBytes && hasReasoning(parts)) {
-            reasoningBlocks.values().forEach(StreamPart::forceHash);
-            parts = withoutReasoning(parts);
-        }
-        boolean textExpected = hasText(parts);
         boolean reasoningIncluded = hasReasoning(parts);
-        List<Map<String, Object>> messages = messages(parts);
-        MessageCapturePolicy.CapturedMessages capture = capturePolicy.capture(messages, false);
-        if (textExpected && reasoningIncluded && !capturedHasText(capture.value())) {
-            reasoningBlocks.values().forEach(StreamPart::forceHash);
-            parts = withoutReasoning(parts);
-            capture = capturePolicy.capture(messages(parts), false);
-        }
+        MessageCapturePolicy.CapturedMessages capture =
+                capturePolicy.capture(messages(parts), false);
         boolean reasoningRemovedByFinalBudget =
-                hasReasoning(parts) && !capturedHasReasoning(capture.value());
+                reasoningIncluded && !capturedHasReasoning(capture.value());
         if (reasoningRemovedByFinalBudget) {
             reasoningBlocks.values().forEach(StreamPart::markBudgetTruncated);
         }
@@ -141,7 +133,9 @@ final class OutputMessageAccumulator {
                 reasoningBlocks.values().stream()
                         .mapToLong(StreamPart::durationNanos)
                         .reduce(0L, OutputMessageAccumulator::saturatingAdd);
-        boolean truncated = reasoningBlocks.values().stream().anyMatch(StreamPart::truncated);
+        boolean truncated =
+                reasoningCapacityTruncated
+                        || reasoningBlocks.values().stream().anyMatch(StreamPart::truncated);
         ReasoningMetrics reasoning =
                 new ReasoningMetrics(
                         !reasoningBlocks.isEmpty() &&
@@ -157,12 +151,18 @@ final class OutputMessageAccumulator {
                         capture.value(),
                         !toolCalls.isEmpty(),
                         reasoning,
-                        optionalMillis(firstTextDeltaNanos));
+                        optionalMillis(firstTextDeltaNanos),
+                        capacityDroppedParts,
+                        capacityDroppedBytes);
         return completed;
     }
 
     private void startReasoning(BlockKey key, long elapsedNanos) {
-        if (!claim(key, PartKind.REASONING) || reasoningBlocks.containsKey(key)) {
+        ClaimResult claim = claim(key, PartKind.REASONING);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || reasoningBlocks.containsKey(key)) {
             incrementMalformedEvents();
             return;
         }
@@ -174,7 +174,12 @@ final class OutputMessageAccumulator {
     }
 
     private void reasoningDelta(BlockKey key, String delta, long elapsedNanos) {
-        if (!claim(key, PartKind.REASONING)) {
+        ClaimResult claim = claim(key, PartKind.REASONING);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.REASONING, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
             incrementMalformedEvents();
             return;
         }
@@ -199,7 +204,13 @@ final class OutputMessageAccumulator {
 
     private void endReasoning(BlockKey key, long elapsedNanos) {
         StreamPart part = reasoningBlocks.get(key);
-        if (part == null || lifecycleTypes.get(key) != PartKind.REASONING || part.closed()) {
+        if (part == null) {
+            if (!endOfRejected(key, PartKind.REASONING)) {
+                incrementMalformedEvents();
+            }
+            return;
+        }
+        if (lifecycleTypes.get(key) != PartKind.REASONING || part.closed()) {
             incrementMalformedEvents();
             return;
         }
@@ -207,7 +218,11 @@ final class OutputMessageAccumulator {
     }
 
     private void startText(BlockKey key, long elapsedNanos) {
-        if (!claim(key, PartKind.TEXT) || textBlocks.containsKey(key)) {
+        ClaimResult claim = claim(key, PartKind.TEXT);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || textBlocks.containsKey(key)) {
             incrementMalformedEvents();
             return;
         }
@@ -218,7 +233,12 @@ final class OutputMessageAccumulator {
     }
 
     private void textDelta(BlockKey key, String delta, long elapsedNanos) {
-        if (!claim(key, PartKind.TEXT)) {
+        ClaimResult claim = claim(key, PartKind.TEXT);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.TEXT, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
             incrementMalformedEvents();
             return;
         }
@@ -241,7 +261,13 @@ final class OutputMessageAccumulator {
 
     private void endText(BlockKey key, long elapsedNanos) {
         StreamPart part = textBlocks.get(key);
-        if (part == null || lifecycleTypes.get(key) != PartKind.TEXT || part.closed()) {
+        if (part == null) {
+            if (!endOfRejected(key, PartKind.TEXT)) {
+                incrementMalformedEvents();
+            }
+            return;
+        }
+        if (lifecycleTypes.get(key) != PartKind.TEXT || part.closed()) {
             incrementMalformedEvents();
             return;
         }
@@ -249,7 +275,11 @@ final class OutputMessageAccumulator {
     }
 
     private void startTool(BlockKey key, String name) {
-        if (!claim(key, PartKind.TOOL) || toolCalls.containsKey(key)) {
+        ClaimResult claim = claim(key, PartKind.TOOL);
+        if (claim == ClaimResult.REJECTED) {
+            return;
+        }
+        if (claim != ClaimResult.NEW || toolCalls.containsKey(key)) {
             incrementMalformedEvents();
             return;
         }
@@ -259,7 +289,12 @@ final class OutputMessageAccumulator {
     }
 
     private void toolDelta(BlockKey key, String name, String delta) {
-        if (!claim(key, PartKind.TOOL)) {
+        ClaimResult claim = claim(key, PartKind.TOOL);
+        if (claim == ClaimResult.REJECTED) {
+            recordDroppedPayload(PartKind.TOOL, delta);
+            return;
+        }
+        if (claim == ClaimResult.CONFLICT) {
             incrementMalformedEvents();
             return;
         }
@@ -279,23 +314,67 @@ final class OutputMessageAccumulator {
 
     private void endTool(BlockKey key, String name) {
         ToolPart part = toolCalls.get(key);
-        if (part == null || lifecycleTypes.get(key) != PartKind.TOOL || part.closed) {
+        if (part == null) {
+            if (!endOfRejected(key, PartKind.TOOL)) {
+                incrementMalformedEvents();
+            }
+            return;
+        }
+        if (lifecycleTypes.get(key) != PartKind.TOOL || part.closed) {
             incrementMalformedEvents();
             return;
         }
         part.close();
     }
 
-    private boolean claim(BlockKey key, PartKind kind) {
+    private ClaimResult claim(BlockKey key, PartKind kind) {
         PartKind existing = lifecycleTypes.get(key);
         if (existing != null) {
-            return existing == kind;
+            return existing == kind ? ClaimResult.EXISTING : ClaimResult.CONFLICT;
         }
         if (lifecycleTypes.size() >= MAX_PARTS || partCount(kind) >= partLimit(kind)) {
-            return false;
+            capacityDroppedParts = saturatingAdd(capacityDroppedParts, 1L);
+            capacityDroppedBytes =
+                    saturatingAdd(
+                            capacityDroppedBytes,
+                            key.replyId().getBytes(StandardCharsets.UTF_8).length
+                                    + key.blockId().getBytes(StandardCharsets.UTF_8).length);
+            if (kind == PartKind.REASONING) {
+                reasoningCapacityTruncated = true;
+            }
+            rememberRejection(key, kind);
+            return ClaimResult.REJECTED;
         }
         lifecycleTypes.put(key, kind);
-        return true;
+        return ClaimResult.NEW;
+    }
+
+    private void rememberRejection(BlockKey key, PartKind kind) {
+        if (rejectedLifecycleTypes.size() >= MAX_PARTS
+                && !rejectedLifecycleTypes.containsKey(key)) {
+            Iterator<BlockKey> eldest = rejectedLifecycleTypes.keySet().iterator();
+            if (eldest.hasNext()) {
+                eldest.next();
+                eldest.remove();
+            }
+        }
+        rejectedLifecycleTypes.put(key, kind);
+    }
+
+    // Consumes the rejection record: a mismatched-kind end is itself malformed, so the
+    // entry is intentionally removed even when the kinds differ.
+    private boolean endOfRejected(BlockKey key, PartKind kind) {
+        return rejectedLifecycleTypes.remove(key) == kind;
+    }
+
+    private void recordDroppedPayload(PartKind kind, String delta) {
+        capacityDroppedBytes =
+                saturatingAdd(
+                        capacityDroppedBytes,
+                        delta == null ? 0 : delta.getBytes(StandardCharsets.UTF_8).length);
+        if (kind == PartKind.REASONING) {
+            reasoningCapacityTruncated = true;
+        }
     }
 
     private int partCount(PartKind kind) {
@@ -335,49 +414,10 @@ final class OutputMessageAccumulator {
         return List.copyOf(parts);
     }
 
-    private int encodedLength(List<Map<String, Object>> parts) {
-        CappedOutputStream output = new CappedOutputStream(maxBytes);
-        try {
-            objectMapper.writeValue(
-                    output, List.of(Map.of("role", "assistant", "parts", parts)));
-            return output.count();
-        } catch (IOException exception) {
-            return maxBytes + 1;
-        }
-    }
-
     private static List<Map<String, Object>> messages(List<Map<String, Object>> parts) {
         return parts.isEmpty()
                 ? List.of()
                 : List.of(Map.of("role", "assistant", "parts", parts));
-    }
-
-    private static boolean hasText(List<Map<String, Object>> parts) {
-        return parts.stream()
-                .anyMatch(
-                        part -> {
-                            Object type = part.get("type");
-                            return "text".equals(type) || "text_hash".equals(type);
-                        });
-    }
-
-    private static boolean capturedHasText(Optional<JsonNode> messages) {
-        if (messages.isEmpty() || !messages.orElseThrow().isArray()) {
-            return false;
-        }
-        for (JsonNode message : messages.orElseThrow()) {
-            JsonNode parts = message.get("parts");
-            if (parts == null || !parts.isArray()) {
-                continue;
-            }
-            for (JsonNode part : parts) {
-                String type = part.path("type").asText();
-                if ("text".equals(type) || "text_hash".equals(type)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private static boolean capturedHasReasoning(Optional<JsonNode> messages) {
@@ -399,10 +439,6 @@ final class OutputMessageAccumulator {
         return false;
     }
 
-    private static boolean hasVisibleReasoning(List<Map<String, Object>> parts) {
-        return parts.stream().anyMatch(part -> "reasoning".equals(part.get("type")));
-    }
-
     private static boolean hasReasoning(List<Map<String, Object>> parts) {
         return parts.stream()
                 .anyMatch(
@@ -410,17 +446,6 @@ final class OutputMessageAccumulator {
                             Object type = part.get("type");
                             return "reasoning".equals(type) || "reasoning_hash".equals(type);
                         });
-    }
-
-    private static List<Map<String, Object>> withoutReasoning(
-            List<Map<String, Object>> parts) {
-        return parts.stream()
-                .filter(
-                        part -> {
-                            Object type = part.get("type");
-                            return !"reasoning".equals(type) && !"reasoning_hash".equals(type);
-                        })
-                .toList();
     }
 
     private static OptionalLong optionalMillis(long nanos) {
@@ -497,12 +522,6 @@ final class OutputMessageAccumulator {
 
         private boolean truncated() {
             return payload.truncated || forcedHash;
-        }
-
-        private void forceHash() {
-            if ("reasoning".equals(type) && mode != ContentCaptureMode.OFF) {
-                forcedHash = true;
-            }
         }
 
         private void markBudgetTruncated() {
@@ -748,42 +767,17 @@ final class OutputMessageAccumulator {
         }
     }
 
-    private static final class CappedOutputStream extends OutputStream {
-        private final int limit;
-        private int count;
-
-        private CappedOutputStream(int limit) {
-            this.limit = Math.max(0, limit);
-        }
-
-        @Override
-        public void write(int value) throws IOException {
-            requireCapacity(1);
-            count++;
-        }
-
-        @Override
-        public void write(byte[] bytes, int offset, int length) throws IOException {
-            Objects.checkFromIndexSize(offset, length, bytes.length);
-            requireCapacity(length);
-            count += length;
-        }
-
-        private void requireCapacity(int length) throws IOException {
-            if (length > limit - count) {
-                throw new IOException("encoded output exceeds byte budget");
-            }
-        }
-
-        private int count() {
-            return count;
-        }
-    }
-
     private enum PartKind {
         REASONING,
         TEXT,
         TOOL
+    }
+
+    private enum ClaimResult {
+        NEW,
+        EXISTING,
+        CONFLICT,
+        REJECTED
     }
 
     private record BlockKey(String replyId, String blockId) {}
@@ -792,7 +786,9 @@ final class OutputMessageAccumulator {
             Optional<JsonNode> messages,
             boolean usedTools,
             ReasoningMetrics reasoning,
-            OptionalLong responseTimeToFirstTokenMs) {
+            OptionalLong responseTimeToFirstTokenMs,
+            long capacityDroppedParts,
+            long capacityDroppedBytes) {
         Result {
             messages = Objects.requireNonNull(messages, "messages");
             reasoning = Objects.requireNonNull(reasoning, "reasoning");

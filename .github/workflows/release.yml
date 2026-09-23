@@ -9,9 +9,30 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build and verify release
+  metadata:
+    name: Release metadata gate
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag format, version match, notes and main ancestry
+        run: python3 scripts/verify_release_metadata.py --tag "$GITHUB_REF_NAME" --main origin/main
+      - name: Gitleaks full history
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.30.1
+
+  build:
+    name: Build and verify release (JDK ${{ matrix.java }})
+    needs: metadata
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -19,7 +40,7 @@ jobs:
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.java }}
           cache: maven
       - name: Verify release version
         shell: bash
@@ -36,6 +57,7 @@ jobs:
           python3 scripts/verify_osv_sbom.py agentscope-cls-observability-sdk/target/bom.json
           python3 scripts/verify_osv_sbom.py agentscope-cls-observability-sdk/target/bom-consumer.json
       - name: Assemble release directory
+        if: matrix.java == '17'
         shell: bash
         run: |
           mkdir -p dist
@@ -46,11 +68,13 @@ jobs:
           cp agentscope-cls-observability-sdk/target/bom-consumer.json dist/bom-consumer.json
           (cd dist && sha256sum -- * > SHA256SUMS)
       - name: Verify package contents
+        if: matrix.java == '17'
         shell: bash
         run: |
           jar tf "dist/agentscope-cls-observability-sdk-$RELEASE_VERSION.jar" > /tmp/sdk-contents.txt
           ! grep -E '(^|/)(demo|test|测试信息|\.private|\.env)(/|$)' /tmp/sdk-contents.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.java == '17'
         with:
           name: github-release-assets
           path: dist/

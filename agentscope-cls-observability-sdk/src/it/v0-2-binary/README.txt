@@ -1,0 +1,3 @@
+The binary compatibility fixture is generated at test runtime by V02BinaryCompatibilityTest.
+
+The api-source directory is an exact source snapshot extracted from the signed repository tag v0.2.0 using the commands recorded in PROVENANCE.txt. The test compiles the auditable v0-2-source/V02Client.java against that exact 0.2 configuration API source, removes the generated 0.2 SDK classes, and then loads the precompiled client bytecode against the current SDK classes. A separate pass compiles the same client directly against the current SDK classpath. No binary fixture is committed to the public repository.

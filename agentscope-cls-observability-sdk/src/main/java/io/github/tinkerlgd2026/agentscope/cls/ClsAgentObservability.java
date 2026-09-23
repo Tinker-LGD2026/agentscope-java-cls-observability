@@ -2,9 +2,15 @@ package io.github.tinkerlgd2026.agentscope.cls;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.middleware.MiddlewareBase;
-import io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.ClsBatchSpanProcessor;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.EncodedSpanQueue;
+import io.github.tinkerlgd2026.agentscope.cls.exporter.SpanRecordExporter;
 import io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware;
+import io.github.tinkerlgd2026.agentscope.cls.internal.CaptureMemoryPool;
+import io.github.tinkerlgd2026.agentscope.cls.internal.DeadlineBudget;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
+import io.github.tinkerlgd2026.agentscope.cls.internal.LifecycleCoordinator;
+import io.github.tinkerlgd2026.agentscope.cls.internal.SinkLifecycleAdapter;
 import io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer;
 import io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy;
@@ -14,53 +20,59 @@ import io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink;
 import io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink;
 import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport;
 import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink;
+import io.github.tinkerlgd2026.agentscope.cls.transport.TencentExportBatchPlanner;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.Objects;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public final class ClsAgentObservability implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(ClsAgentObservability.class);
     private static final String INSTRUMENTATION_NAME = "io.github.tinkerlgd2026.agentscope.cls";
-    private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration MAX_FLUSH_TIMEOUT = Duration.ofMinutes(10);
 
     private final SdkTracerProvider tracerProvider;
-    private final ClsSpanExporter exporter;
     private final MiddlewareBase middleware;
     private final TelemetryCounters counters;
-    private final ExecutorService lifecycleExecutor =
-            Executors.newSingleThreadExecutor(
-                    runnable -> {
-                        Thread thread = new Thread(runnable, "agentscope-cls-lifecycle");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
-    private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicBoolean flushing = new AtomicBoolean();
-    private final AtomicReference<Future<?>> activeLifecycleTask = new AtomicReference<>();
+    private final LifecycleCoordinator coordinator;
+    private final Duration shutdownTimeout;
+    private final ExecutorService lifecycleExecutor;
+    private final AtomicBoolean resourcesReleased = new AtomicBoolean();
 
     private ClsAgentObservability(
             SdkTracerProvider tracerProvider,
-            ClsSpanExporter exporter,
             MiddlewareBase middleware,
-            TelemetryCounters counters) {
+            TelemetryCounters counters,
+            LifecycleCoordinator coordinator,
+            Duration shutdownTimeout,
+            ExecutorService lifecycleExecutor) {
         this.tracerProvider = tracerProvider;
-        this.exporter = exporter;
         this.middleware = middleware;
         this.counters = counters;
+        this.coordinator = coordinator;
+        this.shutdownTimeout = shutdownTimeout;
+        this.lifecycleExecutor = lifecycleExecutor;
+    }
+
+    /** Fixed-size, daemon, bounded-queue executor for flush/shutdown chain tasks. */
+    private static ExecutorService newLifecycleExecutor() {
+        return new java.util.concurrent.ThreadPoolExecutor(
+                2,
+                2,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(128),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "agentscope-cls-lifecycle");
+                    thread.setDaemon(true);
+                    return thread;
+                });
     }
 
     public static ClsAgentObservability create(ClsObservabilityConfig config) {
@@ -72,7 +84,11 @@ public final class ClsAgentObservability implements AutoCloseable {
                 config.transportMode() == ClsObservabilityConfig.TransportMode.CLOUD
                         ? new TencentClsSpanSink(
                                 Objects.requireNonNull(config.topicId()),
-                                new TencentClsAsyncTransport(config))
+                                new TencentClsAsyncTransport(config),
+                                config.exportTimeout(),
+                                new TencentExportBatchPlanner(
+                                        config.maxExportBatchBytes(),
+                                        config.maxExportBatchCount()))
                         : new ConsoleSpanSink(objectMapper, System.out);
         return create(config, sink, objectMapper);
     }
@@ -87,12 +103,25 @@ public final class ClsAgentObservability implements AutoCloseable {
             throw new IllegalArgumentException("config and sink are required");
         }
         TelemetryCounters counters = new TelemetryCounters();
-        ClsSpanExporter exporter =
-                new ClsSpanExporter(
-                        new ClsSpanEncoder(objectMapper),
+        CaptureMemoryPool memoryPool = new CaptureMemoryPool(config.maxCaptureMemoryBytes());
+        EncodedSpanQueue queue = new EncodedSpanQueue(memoryPool, config.maxQueueSize());
+        ClsBatchSpanProcessor spanProcessor =
+                new ClsBatchSpanProcessor(
+                        new ClsSpanEncoder(objectMapper, config.maxContentBytes()),
                         new ClsSpanValidator(objectMapper),
-                        sink,
-                        counters);
+                        queue,
+                        new SpanRecordExporter(sink, counters),
+                        counters,
+                        Objects.requireNonNull(config.exportScheduleDelay()),
+                        Math.max(64, Math.min(256, config.maxQueueSize() / 8)),
+                        config.maxExportBatchBytes(),
+                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                                runnable -> {
+                                    Thread thread =
+                                            new Thread(runnable, "agentscope-cls-export");
+                                    thread.setDaemon(true);
+                                    return thread;
+                                }));
         var resource =
                 Resource.builder()
                         .put("service.name", Objects.requireNonNull(config.serviceName()))
@@ -101,13 +130,6 @@ public final class ClsAgentObservability implements AutoCloseable {
         if (deploymentEnvironment != null) {
             resource.put("deployment.environment.name", deploymentEnvironment);
         }
-        var spanProcessor =
-                BatchSpanProcessor.builder(exporter)
-                        .setScheduleDelay(Objects.requireNonNull(config.exportScheduleDelay()))
-                        .setMaxQueueSize(config.maxQueueSize())
-                        .setMaxExportBatchSize(
-                                Math.max(64, Math.min(256, config.maxQueueSize() / 8)))
-                        .build();
         SdkTracerProvider provider =
                 SdkTracerProvider.builder()
                         .setResource(Objects.requireNonNull(resource.build()))
@@ -128,19 +150,76 @@ public final class ClsAgentObservability implements AutoCloseable {
                                 config.maxContentBytes()),
                         config.contentCaptureMode(),
                         config.reasoningCaptureMode(),
+                        config.providerPayloadCaptureMode(),
+                        config.truncatePreviewBytes(),
                         config.maxContentBytes(),
+                        memoryPool,
+                        config.maxInvocationCaptureMemoryBytes(),
                         active::get,
                         counters,
                         objectMapper,
-                        config.reactorContextHookEnabled());
+                        config.reactorContextMode(),
+                        config.hostTraceLinkEnabled(),
+                        config.hitlWaitTimeout());
+        LifecycleMiddleware lifecycle = new LifecycleMiddleware(middleware, active);
+        ClsTracingMiddleware tracing = middleware;
+        ExecutorService lifecycleExecutor = newLifecycleExecutor();
+        LifecycleCoordinator.Stage flushStage =
+                budget -> {
+                    spanProcessor.prepareFlush(budget.remaining());
+                    try {
+                        var result = provider.forceFlush();
+                        result.join(
+                                Math.max(1L, budget.remaining().toMillis()),
+                                TimeUnit.MILLISECONDS);
+                        return result.isSuccess();
+                    } catch (RuntimeException exception) {
+                        return false;
+                    }
+                };
+        SinkLifecycleAdapter sinkAdapter = new SinkLifecycleAdapter(sink);
+        LifecycleCoordinator coordinator =
+                new LifecycleCoordinator(
+                        lifecycleExecutor,
+                        flushStage,
+                        new LifecycleCoordinator.ShutdownStages(
+                                () -> {
+                                    lifecycle.deactivate();
+                                    tracing.beginDrain();
+                                },
+                                budget -> tracing.awaitQuiescence(budget.remaining()),
+                                tracing::freezeInvocations,
+                                flushStage,
+                                sinkAdapter.barrierStage(),
+                                budget -> {
+                                    try {
+                                        var result = provider.shutdown();
+                                        result.join(
+                                                Math.max(1L, budget.remaining().toMillis()),
+                                                TimeUnit.MILLISECONDS);
+                                        return result.isSuccess();
+                                    } catch (RuntimeException exception) {
+                                        return false;
+                                    }
+                                }));
         return new ClsAgentObservability(
-                provider, exporter, new LifecycleMiddleware(middleware, active), counters);
+                provider,
+                lifecycle,
+                counters,
+                coordinator,
+                config.shutdownTimeout(),
+                lifecycleExecutor);
     }
 
     public MiddlewareBase middleware() {
         return middleware;
     }
 
+    /**
+     * Flushes queued spans and waits for the sink barrier. Concurrent callers share one
+     * single-flight operation; each caller's own timeout only bounds its wait. Returns false
+     * on timeout/failure and after shutdown begins; true once closed.
+     */
     public boolean flush(Duration timeout) {
         if (timeout == null || timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("flush timeout must be positive");
@@ -148,99 +227,68 @@ public final class ClsAgentObservability implements AutoCloseable {
         if (timeout.compareTo(MAX_FLUSH_TIMEOUT) > 0) {
             throw new IllegalArgumentException("flush timeout must not exceed 10 minutes");
         }
-        if (closed.get() || !flushing.compareAndSet(false, true)) {
-            return false;
+        boolean flushed = coordinator.flush(timeout);
+        if (!flushed && coordinator.state() == LifecycleCoordinator.State.RUNNING) {
+            counters.flushFailed(1);
         }
-        long deadline = System.nanoTime() + timeout.toNanos();
-        Future<?> flushTask = null;
-        try {
-            exporter.prepareFlush(timeout);
-            var providerResult = tracerProvider.forceFlush();
-            providerResult.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            if (!providerResult.isSuccess() || closed.get()) {
-                counters.exportFailed(1);
-                return false;
-            }
-            Duration remaining = Duration.ofNanos(Math.max(1L, deadline - System.nanoTime()));
-            exporter.prepareFlush(remaining);
-            Future<io.opentelemetry.sdk.common.CompletableResultCode> sinkFlushTask =
-                    lifecycleExecutor.submit(exporter::flush);
-            flushTask = sinkFlushTask;
-            activeLifecycleTask.set(flushTask);
-            if (closed.get()) {
-                flushTask.cancel(true);
-                return false;
-            }
-            var sinkResult = sinkFlushTask.get(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            sinkResult.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            if (!sinkResult.isSuccess()) {
-                counters.exportFailed(1);
-                return false;
-            }
-            return true;
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            counters.exportFailed(1);
-            LOGGER.warn("CLS observability flush interrupted");
-            return false;
-        } catch (ExecutionException | TimeoutException | RuntimeException exception) {
-            counters.exportFailed(1);
-            LOGGER.warn("CLS observability flush failed: {}", exception.getClass().getSimpleName());
-            return false;
-        } finally {
-            if (flushTask != null) {
-                flushTask.cancel(true);
-                activeLifecycleTask.compareAndSet(flushTask, null);
-            }
-            flushing.set(false);
-        }
+        return flushed;
     }
 
-    private static long remainingMillis(long deadlineNanos) {
-        return Math.max(
-                1L, TimeUnit.NANOSECONDS.toMillis(Math.max(0L, deadlineNanos - System.nanoTime())));
+    /**
+     * Graceful shutdown: enters DRAINING immediately (new roots are rejected, registered
+     * leases continue), then runs quiescence(40%)/processor flush(65%)/sink barrier(85%)/
+     * provider close(100%) against one absolute deadline. The first call owns the unique
+     * shutdown chain; later calls wait on it; after CLOSE_FAILED a later call resumes from
+     * the first incomplete stage. Returns false on timeout/failure and never throws for
+     * telemetry problems.
+     */
+    public boolean shutdown(Duration timeout) {
+        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("shutdown timeout must be positive");
+        }
+        if (timeout.compareTo(MAX_FLUSH_TIMEOUT) > 0) {
+            throw new IllegalArgumentException("shutdown timeout must not exceed 10 minutes");
+        }
+        boolean stopped = coordinator.shutdown(timeout);
+        if (!stopped) {
+            counters.shutdownFailed(1);
+        }
+        return stopped;
     }
 
     public ClsTelemetrySnapshot snapshot() {
         return counters.snapshot();
     }
 
+    /**
+     * Detailed telemetry: per-category counters plus active/waiting invocation gauges read at
+     * call time. All counter values are monotonic longs; the legacy {@link #snapshot()}
+     * aggregates export/flush/shutdown failures for 0.2 compatibility.
+     */
+    public ClsDetailedTelemetrySnapshot detailedSnapshot() {
+        int active = 0;
+        int waiting = 0;
+        if (middleware instanceof LifecycleMiddleware lifecycle) {
+            active = lifecycle.activeInvocations();
+            waiting = lifecycle.waitingInvocations();
+        }
+        return counters.detailedSnapshot(active, waiting);
+    }
+
+    /** Equivalent to {@code shutdown(shutdownTimeout)}; failures are counted, never thrown. */
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
+        shutdown(shutdownTimeout);
+        if (!resourcesReleased.compareAndSet(false, true)) {
             return;
         }
+        // shutdown() rather than shutdownNow(): a stuck single-flight flush keeps running on
+        // the daemon pool and completes when its sink frees; interruption would falsify it.
+        lifecycleExecutor.shutdown();
         LifecycleMiddleware lifecycle =
                 middleware instanceof LifecycleMiddleware value ? value : null;
         if (lifecycle != null) {
-            lifecycle.deactivate();
-        }
-        Future<?> activeTask = activeLifecycleTask.getAndSet(null);
-        if (activeTask != null) {
-            activeTask.cancel(true);
-        }
-        try {
-            long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT.toNanos();
-            var shutdownTask = lifecycleExecutor.submit(tracerProvider::shutdown);
-            var result = shutdownTask.get(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            result.join(remainingMillis(deadline), TimeUnit.MILLISECONDS);
-            if (!result.isSuccess()) {
-                counters.exportFailed(1);
-                LOGGER.warn("CLS observability shutdown did not complete cleanly");
-            }
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            counters.exportFailed(1);
-            LOGGER.warn("CLS observability shutdown interrupted");
-        } catch (ExecutionException | TimeoutException | RuntimeException exception) {
-            counters.exportFailed(1);
-            LOGGER.warn(
-                    "CLS observability shutdown failed: {}", exception.getClass().getSimpleName());
-        } finally {
-            lifecycleExecutor.shutdownNow();
-            if (lifecycle != null) {
-                lifecycle.release();
-            }
+            lifecycle.release();
         }
     }
 
@@ -264,6 +312,14 @@ public final class ClsAgentObservability implements AutoCloseable {
 
         private void deactivate() {
             active.set(false);
+        }
+
+        private int activeInvocations() {
+            return delegate.activeInvocationCount();
+        }
+
+        private int waitingInvocations() {
+            return delegate.waitingInvocationCount();
         }
 
         private void release() {

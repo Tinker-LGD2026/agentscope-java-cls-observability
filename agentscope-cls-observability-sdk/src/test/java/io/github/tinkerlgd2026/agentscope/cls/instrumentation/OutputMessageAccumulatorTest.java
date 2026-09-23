@@ -167,8 +167,68 @@ class OutputMessageAccumulatorTest {
 
         assertThat(result.reasoning().blockCount()).isLessThanOrEqualTo(128);
         assertThat(result.reasoning().malformedEventCount()).isGreaterThan(0);
-        assertThat(accumulator.retainedPayloadBytes()).isLessThanOrEqualTo(3L * 1024L);
+        assertThat(accumulator.retainedPayloadBytes()).isLessThanOrEqualTo(1024L);
         assertThat(output).contains("final-answer", "final-tool", "search");
+    }
+
+    @Test
+    void reasoningCapacityDropIsNotCountedAsMalformed() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
+        for (int index = 0; index < 129; index++) {
+            accumulator.accept(
+                    new ThinkingBlockStartEvent("reply", "think-" + index),
+                    index + 1L);
+        }
+
+        OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+
+        assertThat(result.reasoning().blockCount()).isEqualTo(128);
+        assertThat(result.reasoning().truncated()).isTrue();
+        assertThat(result.reasoning().malformedEventCount()).isZero();
+        assertThat(result.capacityDroppedParts()).isEqualTo(1);
+        assertThat(result.capacityDroppedBytes()).isGreaterThan(0);
+    }
+
+    @Test
+    void capacityRejectedDeltaAndEndAreNotCountedAsMalformed() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
+        for (int index = 0; index < 129; index++) {
+            accumulator.accept(
+                    new ThinkingBlockStartEvent("reply", "think-" + index),
+                    index + 1L);
+        }
+        accumulator.accept(
+                new ThinkingBlockDeltaEvent("reply", "think-128", "payload"), 200L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "think-128"), 300L);
+        accumulator.accept(new ThinkingBlockEndEvent("reply", "never-seen"), 400L);
+
+        OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+
+        assertThat(result.reasoning().malformedEventCount()).isEqualTo(1);
+        assertThat(result.capacityDroppedParts()).isEqualTo(2);
+        assertThat(result.capacityDroppedBytes()).isGreaterThan(0);
+        assertThat(result.reasoning().truncated()).isTrue();
+    }
+
+    @Test
+    void exactOutputQuotasKeepFinalTextAndTool() {
+        OutputMessageAccumulator accumulator = accumulator(FULL, FULL, 4096);
+        for (int index = 0; index < 128; index++) {
+            accumulator.accept(new ThinkingBlockDeltaEvent("reply", "r-" + index, "r"), index);
+        }
+        for (int index = 0; index < 96; index++) {
+            accumulator.accept(new TextBlockDeltaEvent("reply", "t-" + index, "text-" + index), index);
+        }
+        for (int index = 0; index < 32; index++) {
+            accumulator.accept(new ToolCallStartEvent("reply", "tool-" + index, "name-" + index), index);
+        }
+
+        OutputMessageAccumulator.Result result = accumulator.finish(1_000_000L);
+        String output = result.messages().orElseThrow().toString();
+
+        assertThat(result.reasoning().blockCount()).isEqualTo(128);
+        assertThat(output).contains("text-95", "tool-31", "name-31");
+        assertThat(result.capacityDroppedParts()).isZero();
     }
 
     @Test

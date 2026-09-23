@@ -10,6 +10,7 @@ import java.util.concurrent.CompletionStage;
 
 public final class InMemorySpanSink implements SpanSink {
     private final List<ClsSpanRecord> records = Collections.synchronizedList(new ArrayList<>());
+    private volatile boolean closed;
 
     @Override
     public CompletionStage<Void> export(List<ClsSpanRecord> records) {
@@ -23,7 +24,13 @@ public final class InMemorySpanSink implements SpanSink {
     }
 
     @Override
-    public void close() {}
+    public void close() {
+        closed = true;
+    }
+
+    public boolean closed() {
+        return closed;
+    }
 
     public List<ClsSpanRecord> records() {
         synchronized (records) {

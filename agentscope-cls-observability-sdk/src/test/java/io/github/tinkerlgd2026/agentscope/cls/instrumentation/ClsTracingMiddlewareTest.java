@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.AgentResultEvent;
 import io.agentscope.core.event.AgentStartEvent;
 import io.agentscope.core.event.ModelCallEndEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
@@ -21,6 +22,9 @@ import io.agentscope.core.event.ThinkingBlockStartEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultState;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.middleware.ActingInput;
@@ -1041,6 +1045,147 @@ class ClsTracingMiddlewareTest {
                         ignored -> Flux.empty())
                 .collectList()
                 .block();
+    }
+
+    @Test
+    void toolFailureMarksParentPartialWithoutFailingTurn() {
+        RuntimeContext context = validContext("session-partial");
+        ToolUseBlock search =
+                ToolUseBlock.builder()
+                        .id("call-search")
+                        .name("search")
+                        .input(Map.of("query", "weather"))
+                        .build();
+
+        middleware
+                .onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of()),
+                        ignoredAgent ->
+                                middleware.onActing(
+                                        agent,
+                                        context,
+                                        new ActingInput(List.of(search)),
+                                        ignoredActing ->
+                                                Flux.just(
+                                                        new ToolResultEndEvent(
+                                                                "reply-1",
+                                                                "call-search",
+                                                                "search",
+                                                                ToolResultState.ERROR),
+                                                        new AgentResultEvent(
+                                                                Msg.builder()
+                                                                        .role(MsgRole.ASSISTANT)
+                                                                        .content(
+                                                                                List.of(
+                                                                                        TextBlock
+                                                                                                .builder()
+                                                                                                .text(
+                                                                                                        "done")
+                                                                                                .build()))
+                                                                        .build()))))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        SpanData agentSpan = spanOfKind("agent");
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.booleanKey("gen_ai.partial_failure")))
+                .isTrue();
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.longKey("gen_ai.failed_tool_count")))
+                .isEqualTo(1L);
+        assertThat(agentSpan.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        SpanData toolSpan =
+                exporter.getFinishedSpanItems().stream()
+                        .filter(span -> span.getName().equals("execute_tool search"))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(toolSpan.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    @Test
+    void multiModelInvocationAggregatesSortedProviderAndModelSets() {
+        RuntimeContext context = validContext("session-models");
+        Model secondModel = mock(Model.class);
+        when(secondModel.getModelName()).thenReturn("claude-3");
+
+        middleware
+                .onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of()),
+                        ignoredAgent ->
+                                middleware
+                                        .onModelCall(
+                                                agent,
+                                                context,
+                                                new ModelCallInput(
+                                                        List.of(), List.of(), null, model),
+                                                ignoredFirst ->
+                                                        Flux.just(
+                                                                new ModelCallEndEvent(
+                                                                        "reply-1",
+                                                                        new ChatUsage(
+                                                                                1, 1, 0, 0.1))))
+                                        .thenMany(
+                                                middleware.onModelCall(
+                                                        agent,
+                                                        context,
+                                                        new ModelCallInput(
+                                                                List.of(), List.of(), null,
+                                                                secondModel),
+                                                        ignoredSecond ->
+                                                                Flux.just(
+                                                                        new ModelCallEndEvent(
+                                                                                "reply-2",
+                                                                                new ChatUsage(
+                                                                                        1, 1, 0,
+                                                                                        0.1))))))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        SpanData agentSpan = spanOfKind("agent");
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.stringArrayKey("gen_ai.provider.names")))
+                .containsExactly("anthropic", "unknown");
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.longKey("gen_ai.provider.count")))
+                .isEqualTo(2L);
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.stringArrayKey("gen_ai.request.models")))
+                .containsExactly("claude-3", "model-x");
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.longKey("gen_ai.request.model_count")))
+                .isEqualTo(2L);
+        // Multiple values: legacy single-value attributes are omitted.
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.provider.name")))
+                .isNull();
+        assertThat(
+                        agentSpan.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.request.model")))
+                .isNull();
+    }
+
+    private SpanData spanOfKind(String kind) {
+        return exporter.getFinishedSpanItems().stream()
+                .filter(
+                        span ->
+                                kind.equals(
+                                        span.getAttributes()
+                                                .get(
+                                                        AttributeKey.stringKey(
+                                                                "gen_ai.span.kind"))))
+                .findFirst()
+                .orElseThrow();
     }
 
     private static RuntimeContext validContext(String sessionId) {

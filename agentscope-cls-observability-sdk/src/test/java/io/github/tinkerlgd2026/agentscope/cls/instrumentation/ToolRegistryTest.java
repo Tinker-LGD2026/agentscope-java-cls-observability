@@ -1,0 +1,125 @@
+package io.github.tinkerlgd2026.agentscope.cls.instrumentation;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+class ToolRegistryTest {
+
+    @Test
+    void activeTokenEndsSpanNormally() {
+        ToolRegistry registry = new ToolRegistry();
+        ToolRegistry.ToolToken token = registry.startTool("agent-1", "step-1", "call-1", "search");
+
+        assertThat(token.active()).isTrue();
+        token.end(true);
+        assertThat(registry.failedToolCount()).isZero();
+        assertThat(registry.partialFailure()).isFalse();
+    }
+
+    @Test
+    void capacityFailureCreatesNoopTokenThatConsumesLifecycleEvents() {
+        ToolRegistry registry = new ToolRegistry(1, 128);
+        ToolRegistry.ToolToken first = registry.startTool("agent-1", "step-1", "call-1", "search");
+        ToolRegistry.ToolToken overflow = registry.startTool("agent-1", "step-1", "call-2", "calc");
+
+        assertThat(first.active()).isTrue();
+        assertThat(overflow.active()).isFalse();
+        // No-op token consumes end/result without failing the invocation.
+        overflow.end(true);
+        overflow.result();
+        assertThat(registry.capacityRejectedTools()).isEqualTo(1);
+    }
+
+    @Test
+    void perStepToolCapIsIndependentOfGlobalContextCap() {
+        ToolRegistry registry = new ToolRegistry(1024, 1);
+        ToolRegistry.ToolToken first = registry.startTool("agent-1", "step-1", "call-1", "a");
+        ToolRegistry.ToolToken secondStep = registry.startTool("agent-1", "step-2", "call-2", "b");
+        ToolRegistry.ToolToken overflow = registry.startTool("agent-1", "step-1", "call-3", "c");
+
+        assertThat(first.active()).isTrue();
+        assertThat(secondStep.active()).isTrue();
+        assertThat(overflow.active()).isFalse();
+    }
+
+    @Test
+    void toolFailureAggregatesPartialFailureAndRetryDoesNotClearHistory() {
+        ToolRegistry registry = new ToolRegistry();
+        ToolRegistry.ToolToken token = registry.startTool("agent-1", "step-1", "call-1", "search");
+        token.end(false);
+        ToolRegistry.ToolToken retry = registry.startTool("agent-1", "step-1", "call-2", "search");
+        retry.end(true);
+
+        assertThat(registry.failedToolCount()).isEqualTo(1);
+        assertThat(registry.partialFailure()).isTrue();
+    }
+
+    @Test
+    void concurrentStartsNeverExceedCapacity() throws Exception {
+        ToolRegistry registry = new ToolRegistry(4, 128);
+        int threads = 8;
+        int perThread = 50;
+        Thread[] workers = new Thread[threads];
+        java.util.concurrent.atomic.AtomicInteger activeCount = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        for (int index = 0; index < threads; index++) {
+            int worker = index;
+            workers[index] =
+                    new Thread(
+                            () -> {
+                                await(start);
+                                for (int tool = 0; tool < perThread; tool++) {
+                                    if (registry
+                                            .startTool(
+                                                    "agent-1",
+                                                    "step-1",
+                                                    "w" + worker + "-c" + tool,
+                                                    "t")
+                                            .active()) {
+                                        activeCount.incrementAndGet();
+                                    }
+                                }
+                            });
+            workers[index].start();
+        }
+        start.countDown();
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        assertThat(activeCount.get()).isEqualTo(4);
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Test
+    void duplicateStartWithSameCallIdKeepsOriginalToken() {
+        ToolRegistry registry = new ToolRegistry();
+        ToolRegistry.ToolToken first = registry.startTool("agent-1", "step-1", "call-1", "search");
+        ToolRegistry.ToolToken duplicate =
+                registry.startTool("agent-1", "step-1", "call-1", "search");
+
+        assertThat(first.active()).isTrue();
+        assertThat(duplicate.active()).isFalse();
+        assertThat(registry.duplicateRejectedTools()).isEqualTo(1);
+        first.end(true);
+        assertThat(registry.failedToolCount()).isZero();
+    }
+
+    @Test
+    void blankCallIdCountsAsMalformedNotCapacity() {
+        ToolRegistry registry = new ToolRegistry();
+
+        assertThat(registry.startTool("agent-1", "step-1", " ", "search").active()).isFalse();
+
+        assertThat(registry.malformedRejectedTools()).isEqualTo(1);
+        assertThat(registry.capacityRejectedTools()).isZero();
+    }
+}

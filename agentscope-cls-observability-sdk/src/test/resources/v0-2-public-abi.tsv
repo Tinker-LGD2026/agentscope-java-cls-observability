@@ -1,0 +1,228 @@
+# AgentScope CLS Observability SDK v0.2.0 public JVM ABI
+# release-jar-sha256=96911fd291fc3712ef050df728fc33707fbd9317503425b6a5646662778e5e02
+# format: CLASS<TAB>name<TAB>interface<TAB>final or MEMBER<TAB>owner<TAB>kind<TAB>name<TAB>descriptor<TAB>static<TAB>final<TAB>abstract
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	create	(Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig;)Lio/github/tinkerlgd2026/agentscope/cls/ClsAgentObservability;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	create	(Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig;Lio/github/tinkerlgd2026/agentscope/cls/transport/SpanSink;)Lio/github/tinkerlgd2026/agentscope/cls/ClsAgentObservability;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	middleware	()Lio/agentscope/core/middleware/MiddlewareBase;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	flush	(Ljava/time/Duration;)Z	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	snapshot	()Lio/github/tinkerlgd2026/agentscope/cls/ClsTelemetrySnapshot;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsAgentObservability	METHOD	close	()V	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	CONSTRUCTOR	<init>	(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	defaults	()Lio/github/tinkerlgd2026/agentscope/cls/ClsInvocationContext;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	userName	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	turnId	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	agentType	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext	METHOD	entryType	()Ljava/lang/String;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	builder	()Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	fromEnvironment	(Ljava/util/Map;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	transportMode	()Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	endpoint	()Ljava/net/URI;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	topicId	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	secretId	()[C	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	secretKey	()[C	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	secretToken	()Ljava/util/Optional;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	destroyCredentials	()V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	reactorContextHookEnabled	()Z	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	exportScheduleDelay	()Ljava/time/Duration;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	maxQueueSize	()I	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	serviceName	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	deploymentEnvironment	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	contentCaptureMode	()Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	reasoningCaptureMode	()Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	maxContentBytes	()I	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig	METHOD	toString	()Ljava/lang/String;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	transportMode	(Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	endpoint	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	topicId	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	secretId	([C)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	secretKey	([C)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	secretToken	([C)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	serviceName	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	deploymentEnvironment	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	contentCaptureMode	(Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	reasoningCaptureMode	(Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	maxContentBytes	(I)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	reactorContextHookEnabled	(Z)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	exportScheduleDelay	(Ljava/time/Duration;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	maxQueueSize	(I)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$Builder;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$Builder	METHOD	build	()Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$TransportMode	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$TransportMode	FIELD	CONSOLE	Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$TransportMode	FIELD	CLOUD	Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$TransportMode	METHOD	values	()[Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig$TransportMode	METHOD	valueOf	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig$TransportMode;	true	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	CONSTRUCTOR	<init>	(JJJJ)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	acceptedSpans	()J	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	invalidSpans	()J	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	exportFailures	()J	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.ClsTelemetrySnapshot	METHOD	droppedSpans	()J	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	CONSTRUCTOR	<init>	(Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanEncoder;Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanValidator;Lio/github/tinkerlgd2026/agentscope/cls/transport/SpanSink;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	CONSTRUCTOR	<init>	(Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanEncoder;Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanValidator;Lio/github/tinkerlgd2026/agentscope/cls/transport/SpanSink;Lio/github/tinkerlgd2026/agentscope/cls/internal/TelemetryCounters;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	METHOD	export	(Ljava/util/Collection;)Lio/opentelemetry/sdk/common/CompletableResultCode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	METHOD	prepareFlush	(Ljava/time/Duration;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	METHOD	flush	()Lio/opentelemetry/sdk/common/CompletableResultCode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.exporter.ClsSpanExporter	METHOD	shutdown	()Lio/opentelemetry/sdk/common/CompletableResultCode;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	CONSTRUCTOR	<init>	(Lio/opentelemetry/api/trace/Tracer;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentSanitizer;Ljava/util/function/BooleanSupplier;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	CONSTRUCTOR	<init>	(Lio/opentelemetry/api/trace/Tracer;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentSanitizer;Ljava/util/function/BooleanSupplier;Lio/github/tinkerlgd2026/agentscope/cls/internal/TelemetryCounters;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	CONSTRUCTOR	<init>	(Lio/opentelemetry/api/trace/Tracer;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentSanitizer;Ljava/util/function/BooleanSupplier;Lio/github/tinkerlgd2026/agentscope/cls/internal/TelemetryCounters;Lcom/fasterxml/jackson/databind/ObjectMapper;Z)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	CONSTRUCTOR	<init>	(Lio/opentelemetry/api/trace/Tracer;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentSanitizer;Lio/github/tinkerlgd2026/agentscope/cls/privacy/MessageCapturePolicy;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;ILjava/util/function/BooleanSupplier;Lio/github/tinkerlgd2026/agentscope/cls/internal/TelemetryCounters;Lcom/fasterxml/jackson/databind/ObjectMapper;Z)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	close	()V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	order	()I	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	onAgent	(Lio/agentscope/core/agent/Agent;Lio/agentscope/core/agent/RuntimeContext;Lio/agentscope/core/middleware/AgentInput;Ljava/util/function/Function;)Lreactor/core/publisher/Flux;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	onReasoning	(Lio/agentscope/core/agent/Agent;Lio/agentscope/core/agent/RuntimeContext;Lio/agentscope/core/middleware/ReasoningInput;Ljava/util/function/Function;)Lreactor/core/publisher/Flux;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	onModelCall	(Lio/agentscope/core/agent/Agent;Lio/agentscope/core/agent/RuntimeContext;Lio/agentscope/core/middleware/ModelCallInput;Ljava/util/function/Function;)Lreactor/core/publisher/Flux;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.instrumentation.ClsTracingMiddleware	METHOD	onActing	(Lio/agentscope/core/agent/Agent;Lio/agentscope/core/agent/RuntimeContext;Lio/agentscope/core/middleware/ActingInput;Ljava/util/function/Function;)Lreactor/core/publisher/Flux;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	FIELD	SESSION_ID_MAX_BYTES	I	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	FIELD	USER_ID_MAX_BYTES	I	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	FIELD	TURN_ID_MAX_BYTES	I	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	FIELD	USER_NAME_MAX_BYTES	I	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	FIELD	TYPE_MAX_BYTES	I	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer	METHOD	bounded	(Ljava/lang/String;I)Ljava/lang/String;	true	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport	METHOD	newObjectMapper	()Lcom/fasterxml/jackson/databind/ObjectMapper;	true	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	CONSTRUCTOR	<init>	()V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	METHOD	accepted	(J)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	METHOD	invalid	(J)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	METHOD	exportFailed	(J)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	METHOD	dropped	(J)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters	METHOD	snapshot	()Lio/github/tinkerlgd2026/agentscope/cls/ClsTelemetrySnapshot;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	FIELD	OFF	Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	FIELD	HASH	Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	FIELD	TRUNCATE	Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	FIELD	FULL	Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	METHOD	values	()[Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	METHOD	valueOf	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	METHOD	parse	(Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentCaptureMode	METHOD	parse	(Ljava/lang/String;Ljava/lang/String;)Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	true	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	CONSTRUCTOR	<init>	(Lcom/fasterxml/jackson/databind/ObjectMapper;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;I)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	isCapturing	()Z	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	isHashOnly	()Z	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	mode	()Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	streamedMessageHash	(Ljava/lang/String;Ljava/lang/String;J)Lcom/fasterxml/jackson/databind/node/ArrayNode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	streamedContentHash	(Ljava/lang/String;J)Lcom/fasterxml/jackson/databind/node/ObjectNode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	maxBytes	()I	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	hash	(Ljava/lang/Object;)Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	captureMessages	(Ljava/lang/Object;)Ljava/util/Optional;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.ContentSanitizer	METHOD	capture	(Ljava/lang/Object;)Ljava/util/Optional;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy	CONSTRUCTOR	<init>	(Lcom/fasterxml/jackson/databind/ObjectMapper;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;Lio/github/tinkerlgd2026/agentscope/cls/privacy/ContentCaptureMode;I)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy	METHOD	capture	(Ljava/util/List;Z)Lio/github/tinkerlgd2026/agentscope/cls/privacy/MessageCapturePolicy$CapturedMessages;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy	METHOD	capture	(Ljava/util/List;ZZ)Lio/github/tinkerlgd2026/agentscope/cls/privacy/MessageCapturePolicy$CapturedMessages;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	CONSTRUCTOR	<init>	(Ljava/util/Optional;Ljava/util/Optional;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	METHOD	value	()Ljava/util/Optional;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$CapturedMessages	METHOD	observableHash	()Ljava/util/Optional;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	CONSTRUCTOR	<init>	(Ljava/lang/String;J)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	METHOD	sha256	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.privacy.MessageCapturePolicy$PrecomputedHash	METHOD	originalBytes	()J	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	SPAN_KIND	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	OPERATION_NAME	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	AGENT_TYPE	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	AGENT_ID	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	AGENT_NAME	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	SESSION_ID	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	TURN_ID	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	STEP_ID	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	USER_ID	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	USER_NAME	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_PRESENT	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_BLOCK_COUNT	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_OUTPUT_BYTES	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_DURATION_MS	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_TTFT_MS	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_CAPTURE_MODE	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_TRUNCATED	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	REASONING_MALFORMED_EVENTS	Ljava/lang/String;	true	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsFields	FIELD	RESPONSE_TTFT_MS	Ljava/lang/String;	true	true	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	CONSTRUCTOR	<init>	(Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanRecord;Lcom/fasterxml/jackson/databind/node/ObjectNode;Lcom/fasterxml/jackson/databind/node/ObjectNode;Lcom/fasterxml/jackson/databind/node/ArrayNode;Lcom/fasterxml/jackson/databind/node/ArrayNode;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	record	()Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanRecord;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	attribute	()Lcom/fasterxml/jackson/databind/node/ObjectNode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	resource	()Lcom/fasterxml/jackson/databind/node/ObjectNode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	links	()Lcom/fasterxml/jackson/databind/node/ArrayNode;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanDocument	METHOD	logs	()Lcom/fasterxml/jackson/databind/node/ArrayNode;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder	CONSTRUCTOR	<init>	(Lcom/fasterxml/jackson/databind/ObjectMapper;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder	METHOD	encode	(Lio/opentelemetry/sdk/trace/data/SpanData;)Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanRecord;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanEncoder	METHOD	encodeDocument	(Lio/opentelemetry/sdk/trace/data/SpanData;)Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanDocument;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	CONSTRUCTOR	<init>	(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	fields	()Ljava/util/Map;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	toString	()Ljava/lang/String;	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	hashCode	()I	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	equals	(Ljava/lang/Object;)Z	false	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	traceID	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	spanID	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	parentSpanID	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	name	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	kind	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	start	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	end	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	duration	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	statusCode	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	statusMessage	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	attribute	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	resource	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	traceState	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	links	()Ljava/lang/String;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanRecord	METHOD	logs	()Ljava/lang/String;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator	CONSTRUCTOR	<init>	(Lcom/fasterxml/jackson/databind/ObjectMapper;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator	METHOD	validate	(Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanRecord;)Ljava/util/List;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.schema.ClsSpanValidator	METHOD	validate	(Lio/github/tinkerlgd2026/agentscope/cls/schema/ClsSpanDocument;)Ljava/util/List;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.ClsAsyncTransport	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ClsAsyncTransport	METHOD	putLogs	(Ljava/lang/String;Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ClsAsyncTransport	METHOD	close	(Ljava/time/Duration;)V	false	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ClsAsyncTransport	METHOD	close	()V	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink	CONSTRUCTOR	<init>	(Lcom/fasterxml/jackson/databind/ObjectMapper;Ljava/io/PrintStream;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink	METHOD	export	(Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink	METHOD	flush	(Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink	METHOD	close	()V	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	CONSTRUCTOR	<init>	()V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	METHOD	export	(Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	METHOD	flush	(Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	METHOD	close	()V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.InMemorySpanSink	METHOD	records	()Ljava/util/List;	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink	true	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink	METHOD	export	(Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink	METHOD	flush	(Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;	false	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink	METHOD	close	()V	false	false	true
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport	CONSTRUCTOR	<init>	(Lio/github/tinkerlgd2026/agentscope/cls/ClsObservabilityConfig;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport	METHOD	putLogs	(Ljava/lang/String;Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport	METHOD	close	(Ljava/time/Duration;)V	false	false	false
+CLASS	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink	false	true
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink	CONSTRUCTOR	<init>	(Ljava/lang/String;Lio/github/tinkerlgd2026/agentscope/cls/transport/ClsAsyncTransport;)V	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink	METHOD	export	(Ljava/util/List;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink	METHOD	flush	(Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;	false	false	false
+MEMBER	io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink	METHOD	close	()V	false	false	false

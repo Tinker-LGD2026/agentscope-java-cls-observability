@@ -162,22 +162,105 @@ class ClsAgentObservabilityTest {
     }
 
     @Test
-    void concurrentCloseDoesNotWaitForLongRunningFlushTimeout() throws Exception {
+    void closeDuringBlockedFlushIsBoundedByShutdownTimeout() throws Exception {
         BlockingFlushSink sink = new BlockingFlushSink();
         ClsAgentObservability observability =
-                ClsAgentObservability.create(ClsObservabilityConfig.builder().build(), sink);
+                ClsAgentObservability.create(
+                        ClsObservabilityConfig.builder()
+                                .shutdownTimeout(Duration.ofSeconds(1))
+                                .build(),
+                        sink);
         var executor = Executors.newFixedThreadPool(2);
         try {
             var flushing = executor.submit(() -> observability.flush(Duration.ofMinutes(5)));
             assertThat(sink.entered.await(1, TimeUnit.SECONDS)).isTrue();
             var closing = executor.submit(observability::close);
 
-            closing.get(1, TimeUnit.SECONDS);
-            assertThat(flushing.get(1, TimeUnit.SECONDS)).isFalse();
+            // The shutdown chain waits for the in-flight flush only within its own absolute
+            // deadline; it never invokes a second sink stage while the flush is stuck.
+            closing.get(5, TimeUnit.SECONDS);
+            assertThat(sink.flushCalls.get()).isEqualTo(1);
+            // The stuck flush keeps running independently and succeeds once the sink frees.
+            sink.release.countDown();
+            assertThat(flushing.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(sink.flushCalls.get()).isEqualTo(1);
         } finally {
             sink.release.countDown();
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void shutdownIsIdempotentAndRejectsNewRoots() {
+        RecordingSink sink = new RecordingSink();
+        ClsAgentObservability observability =
+                ClsAgentObservability.create(ClsObservabilityConfig.builder().build(), sink);
+
+        assertThat(observability.shutdown(Duration.ofSeconds(2))).isTrue();
+        assertThat(observability.shutdown(Duration.ofSeconds(2))).isTrue();
+        assertThat(observability.flush(Duration.ofSeconds(1))).isTrue();
+
+        // After DRAINING/CLOSED a new root invocation is a pass-through without telemetry.
+        Agent agent = org.mockito.Mockito.mock(Agent.class);
+        org.mockito.Mockito.when(agent.getName()).thenReturn("assistant");
+        org.mockito.Mockito.when(agent.getAgentId()).thenReturn("agent-1");
+        RuntimeContext context =
+                RuntimeContext.builder().sessionId("session-1").userId("user-1").build();
+        observability
+                .middleware()
+                .onAgent(
+                        agent,
+                        context,
+                        new AgentInput(List.of()),
+                        ignored ->
+                                reactor.core.publisher.Flux.just(
+                                        new AgentResultEvent(
+                                                Msg.builder()
+                                                        .role(MsgRole.ASSISTANT)
+                                                        .content(
+                                                                List.of(
+                                                                        TextBlock.builder()
+                                                                                .text("done")
+                                                                                .build()))
+                                                        .build())))
+                .collectList()
+                .block(Duration.ofSeconds(5));
+
+        assertThat(sink.records).isEmpty();
+        observability.close();
+        assertThat(sink.closeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void detailedSnapshotExposesCountersAndGauges() {
+        RecordingSink sink = new RecordingSink();
+        ClsAgentObservability observability =
+                ClsAgentObservability.create(ClsObservabilityConfig.builder().build(), sink);
+
+        ClsDetailedTelemetrySnapshot detailed = observability.detailedSnapshot();
+        assertThat(detailed.acceptedSpans()).isZero();
+        assertThat(detailed.activeInvocations()).isZero();
+        assertThat(detailed.waitingInvocations()).isZero();
+        assertThat(detailed.flushFailures()).isZero();
+        assertThat(detailed.shutdownFailures()).isZero();
+
+        assertThat(observability.shutdown(Duration.ofSeconds(2))).isTrue();
+        assertThat(observability.detailedSnapshot().activeInvocations()).isZero();
+        observability.close();
+    }
+
+    @Test
+    void shutdownRejectsNonPositiveTimeout() {
+        ClsAgentObservability observability =
+                ClsAgentObservability.create(
+                        ClsObservabilityConfig.builder().build(), new RecordingSink());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> observability.shutdown(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> observability.shutdown(null))
+                .isInstanceOf(IllegalArgumentException.class);
+        observability.close();
     }
 
     @Test
@@ -208,6 +291,8 @@ class ClsAgentObservabilityTest {
     private static final class BlockingFlushSink implements SpanSink {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final java.util.concurrent.atomic.AtomicInteger flushCalls =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
         public CompletionStage<Void> export(List<ClsSpanRecord> records) {
@@ -216,6 +301,7 @@ class ClsAgentObservabilityTest {
 
         @Override
         public CompletionStage<Boolean> flush(Duration timeout) {
+            flushCalls.incrementAndGet();
             entered.countDown();
             try {
                 release.await();

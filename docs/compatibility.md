@@ -52,6 +52,28 @@ OpenAI-compatible、Anthropic、Gemini 等模型是否产生完整 Thinking 事�
 
 本 SDK 和公开 Demo 不使用 MCP，因此 Maven 示例排除了 AgentScope 2.0.3 传递的 `io.modelcontextprotocol.sdk:mcp`。如果客户应用需要 AgentScope MCP 功能，不应照抄该排除项；请先根据 MCP Java SDK 安全公告选择修复版本，并验证其与当前 AgentScope 版本的兼容性。
 
+## 0.2 → 0.3 迁移
+
+常规接入只需升级版本号：0.2 的公开 API 无删除、无签名变更，0.2 源码与预编译二进制 fixture
+均在 0.3 上通过编译与运行。以下行为变化需要知晓：
+
+1. **控制事件语义**：`AllToolsDenied`/`ExceedMaxIters`/`RequestStop` 不再误报普通 `stop`；
+   它们决定 `gen_ai.turn.finish_reason`（denied/max_iters/interrupted），Span 标记
+   `gen_ai.incomplete=true`，`completed` 取决于终止前是否观察到 AgentResult；
+2. **Provider payload 独立开关**：`CLS_PROVIDER_PAYLOAD_CAPTURE` 默认 `off`，0.2 不受影响；
+3. **Attribute 上限收紧**：单 field 上限从 1.1 MB 配置值收紧为不超过 1,000,000 UTF-8 bytes；
+   0.2 更大的配置值启动时告警并钳制，不拒绝启动；
+4. **Tool 局部失败**：父层 Span 增加 `gen_ai.partial_failure` 与 `gen_ai.failed_tool_count`
+   指标，局部失败不再把整轮标记为 error；
+5. **Host Link**：宿主已有 OTel Span 时 CLS Entry 保持独立 Trace 并写入 Link；可用
+   `CLS_HOST_TRACE_LINK_ENABLED=false` 关闭；
+6. **Reactor Hook 迁移**：`CLS_REACTOR_CONTEXT_HOOK=false` 映射 `private`（默认），`true`
+   映射 `legacy_hook` 并打印弃用告警；新接入使用 `CLS_REACTOR_CONTEXT_MODE`；
+7. **关闭语义**：`flush()` 单飞合并；新增 `shutdown(Duration)` 优雅关闭；`close()` 等价于
+   `shutdown(配置的 shutdownTimeout)`；DRAINING 后新根调用不产生遥测、业务照常；
+8. **指标**：新增 `detailedSnapshot()` 细分计数；旧 `snapshot()` 的 `exportFailures` 现在
+   聚合导出、flush 与 shutdown 失败，`droppedSpans` 包含队列/内存溢出。
+
 ## CI 策略
 
 每个 Pull Request：

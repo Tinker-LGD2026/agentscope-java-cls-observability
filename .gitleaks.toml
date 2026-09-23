@@ -9,3 +9,10 @@ regexes = [
   '''sk-abcdefghijklmnopqrstuvwxyz012345''',
   '''Bearer aaaaaaaaaaaaaaaaaaaa'''
 ]
+
+[[allowlists]]
+description = "Synthetic PEM block used to verify redaction of private keys in tests"
+rules = ['''private-key''']
+paths = [
+  '''agentscope-cls-observability-sdk/src/test/java/io/github/tinkerlgd2026/agentscope/cls/privacy/CanonicalPayloadCaptureTest.java'''
+]

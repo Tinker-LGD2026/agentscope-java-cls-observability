@@ -67,8 +67,6 @@ def main() -> int:
         version = None
     else:
         version = match.group(1)
-        if version.endswith("SNAPSHOT"):
-            fail(errors, f"tag {args.tag!r} must not be a SNAPSHOT")
 
     version_from_pom = project_version(Path(args.pom))
     if version_from_pom is None:
@@ -97,7 +95,10 @@ def main() -> int:
     if version is not None:
         if not notes.is_file():
             fail(errors, f"release notes {args.notes} not found")
-        elif version not in notes.read_text(encoding="utf-8"):
+        elif not re.search(
+            r"(?<![\d.])" + re.escape(version) + r"(?![\d.])",
+            notes.read_text(encoding="utf-8"),
+        ):
             fail(errors, f"release notes {args.notes} do not mention version {version}")
 
     if errors:

@@ -9,7 +9,7 @@ SDK 是嵌入客户 AgentScope 应用的 Java 库，不是独立服务。以下�
 - 每次顶层 Agent 调用传 `RuntimeContext`；
 - JVM 正常退出时执行 `flush()` 和 `close()`；
 - Secret 只在运行时注入；
-- Endpoint 与 Topic 位于同一地域（部署前提，启动会校验）；
+- Endpoint 与 Topic 位于同一地域（部署前提，由 CLS 控制台配置保证；SDK 只校验 Endpoint 域名形态）；
 - 生产默认 `CLS_CONTENT_CAPTURE=off`、`CLS_REASONING_CAPTURE=off`、
   `CLS_PROVIDER_PAYLOAD_CAPTURE=off`、`CLS_REACTOR_CONTEXT_MODE=private`；
 - 编排层优雅停机预算 ≥60 秒（Kubernetes `terminationGracePeriodSeconds`、Compose

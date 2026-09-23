@@ -113,6 +113,39 @@ class VerifyReleaseMetadataTest(unittest.TestCase):
         result = self._run("--tag", "v0.3.0-SNAPSHOT", "--main", "main")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_rejects_snapshot_pom_with_valid_tag(self) -> None:
+        self._write("pom.xml", POM_TEMPLATE.format(version="0.3.0-SNAPSHOT"))
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "snapshot")
+        self._tag("v0.3.0")
+        result = self._run("--tag", "v0.3.0", "--main", "main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SNAPSHOT", result.stderr)
+
+    def test_rejects_missing_tag(self) -> None:
+        result = self._run("--tag", "v9.9.9", "--main", "main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not exist", result.stderr)
+
+    def test_rejects_missing_notes_file(self) -> None:
+        (self.repo / ".github/release-notes.md").unlink()
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "drop notes")
+        self._tag("v0.3.0")
+        result = self._run("--tag", "v0.3.0", "--main", "main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release notes", result.stderr)
+
+    def test_notes_substring_is_not_a_version_match(self) -> None:
+        # "10.3.0" must not satisfy the 0.3.0 requirement.
+        self._write(".github/release-notes.md", NOTES_TEMPLATE.format(version="10.3.0"))
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "notes")
+        self._tag("v0.3.0")
+        result = self._run("--tag", "v0.3.0", "--main", "main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release notes", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

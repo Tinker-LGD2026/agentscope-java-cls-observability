@@ -41,6 +41,9 @@ class LiveTravelVerificationTest {
                     value != null && !value.isBlank(), "missing live credential " + key);
         }
 
+        Assumptions.assumeTrue(
+                "cloud".equals(environment.get("CLS_TRANSPORT")),
+                "live verification requires CLS_TRANSPORT=cloud");
         TravelDemoSettings settings = TravelDemoSettings.fromEnvironment(environment);
         ClsObservabilityConfig clsConfig =
                 ClsObservabilityConfig.fromEnvironment(environment);

@@ -151,8 +151,12 @@ final class ControlEventTracker {
                 InvocationLifecycle oldGeneration = generations.get(record.generationId());
                 if (oldGeneration != null) {
                     InvocationLifecycle rotated = lease.rotateFrom(oldGeneration);
-                    if (rotated != null) {
-                        generations.putIfAbsent(rotated.generationId(), rotated);
+                    // Only a genuinely new rotation notifies and resets the terminal slate;
+                    // a sibling's rotateFrom returns the already-rotated generation, whose
+                    // putIfAbsent does not insert.
+                    if (rotated != null
+                            && generations.putIfAbsent(rotated.generationId(), rotated)
+                                    == null) {
                         record.markTombstone(rotated.generationId());
                         rotatedToNotify = rotated;
                     }

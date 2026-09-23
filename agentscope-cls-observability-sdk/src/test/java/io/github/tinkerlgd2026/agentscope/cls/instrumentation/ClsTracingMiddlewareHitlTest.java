@@ -399,6 +399,81 @@ class ClsTracingMiddlewareHitlTest {
     }
 
     @Test
+    void siblingLateResultsRotateOnceAndNeverWipeNewGenerationState() {
+        // Two waits tombstoned by the same timeout; their late results arrive interleaved
+        // with the new generation's AgentResult. The second late result must neither rotate
+        // again nor reset the recovered generation's terminal slate.
+        List<ToolUseBlock> twoCalls =
+                List.of(
+                        toolCalls().get(0),
+                        ToolUseBlock.builder()
+                                .id("call-2")
+                                .name("search")
+                                .input(java.util.Map.of("q", "y"))
+                                .build());
+        reactor.core.publisher.Sinks.Many<AgentEvent> sink =
+                reactor.core.publisher.Sinks.many().unicast().onBackpressureBuffer();
+        middleware
+                .onAgent(agent, validContext(), new AgentInput(List.of()), ignored -> sink.asFlux())
+                .subscribe();
+        sink.tryEmitNext(new RequireUserConfirmEvent("reply-1", twoCalls));
+
+        SpanData oldEntry = entrySpan();
+        sink.tryEmitNext(
+                new UserConfirmResultEvent(
+                        "reply-1", List.of(new ConfirmResult(true, twoCalls.get(0)))));
+        // The recovered generation observes its business result.
+        sink.tryEmitNext(resultEvent());
+        // Sibling late result for the same timed-out generation.
+        sink.tryEmitNext(
+                new UserConfirmResultEvent(
+                        "reply-1", List.of(new ConfirmResult(true, twoCalls.get(1)))));
+        sink.tryEmitComplete();
+
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        List<SpanData> entries = List.of();
+        while (System.nanoTime() < deadline) {
+            entries =
+                    exporter.getFinishedSpanItems().stream()
+                            .filter(
+                                    span ->
+                                            "entry"
+                                                    .equals(
+                                                            span.getAttributes()
+                                                                    .get(
+                                                                            AttributeKey
+                                                                                    .stringKey(
+                                                                            "gen_ai.span.kind"))))
+                            .toList();
+            if (entries.size() >= 2) {
+                break;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        assertThat(entries).hasSize(2);
+        SpanData rotated =
+                entries.stream()
+                        .filter(span -> !span.getTraceId().equals(oldEntry.getTraceId()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(
+                        rotated.getAttributes()
+                                .get(AttributeKey.booleanKey("gen_ai.turn.completed")))
+                .isTrue();
+        assertThat(
+                        rotated.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("normal");
+        assertThat(rotated.getAttributes().get(AttributeKey.booleanKey("gen_ai.incomplete")))
+                .isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
     void freezeEndsStuckInvocationWithShutdownOutcomeAndReleasesLease() {
         // A dedicated instance with a long wait timeout: the invocation must still be parked
         // in its HITL wait when the freeze lands (the shared fixture times out at 200ms).

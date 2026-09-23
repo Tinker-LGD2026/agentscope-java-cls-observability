@@ -1424,7 +1424,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         if (generation == null || first == null || generation.agentContext() == first) {
             return resolved;
         }
-        if (resolved == first && false) {
+        if (resolved == first) {
             return generation.agentContext();
         }
         // storeInContext may re-wrap (e.g. BRIDGE/LEGACY_HOOK operators); fall back to

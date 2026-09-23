@@ -4,9 +4,7 @@ import com.tencentcloudapi.cls.producer.common.LogItem;
 import com.tencentcloudapi.cls.producer.common.LogSizeCalculator;
 import io.github.tinkerlgd2026.agentscope.cls.schema.Utf8LogItemSizer;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Slices a record batch into physical Tencent producer submissions that satisfy both the
@@ -59,11 +57,18 @@ public final class TencentExportBatchPlanner {
         return List.copyOf(slices);
     }
 
+    // Sum over the raw contents list: duplicate keys must not collapse, otherwise the
+    // conservative size could fall below the official calculator.
     private static long conservativeSize(LogItem item) {
-        Map<String, String> fields = new LinkedHashMap<>();
+        long size = Utf8LogItemSizer.RECORD_OVERHEAD_BYTES;
         for (var content : item.mContents.getContentsList()) {
-            fields.put(content.getKey(), content.getValue());
+            if (content.getKey() != null) {
+                size += Utf8LogItemSizer.utf8Length(content.getKey());
+            }
+            if (content.getValue() != null) {
+                size += Utf8LogItemSizer.utf8Length(content.getValue());
+            }
         }
-        return Utf8LogItemSizer.size(fields);
+        return size;
     }
 }

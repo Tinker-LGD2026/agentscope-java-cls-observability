@@ -37,7 +37,8 @@ class CustomSpanSinkContractTest {
                         new SpanRecordExporter(sink, counters),
                         counters,
                         Duration.ofHours(1),
-                        64,
+                        // Deliberately above the 256 clamp to prove the processor enforces it.
+                        1_000,
                         Long.MAX_VALUE,
                         Executors.newSingleThreadScheduledExecutor());
         SdkTracerProvider provider =
@@ -68,6 +69,8 @@ class CustomSpanSinkContractTest {
 
         assertThat(sink.batchSizes).isNotEmpty();
         assertThat(sink.batchSizes).allSatisfy(size -> assertThat(size).isLessThanOrEqualTo(256));
+        // 300 records within one drain must produce a full 256 slice followed by the rest.
+        assertThat(sink.batchSizes.get(0)).isEqualTo(256);
         assertThat(sink.batchSizes.stream().mapToInt(Integer::intValue).sum())
                 .isEqualTo(counters.snapshot().acceptedSpans());
         assertThat(processor.shutdown().isSuccess()).isTrue();

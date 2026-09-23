@@ -183,7 +183,7 @@ class TencentClsSpanSinkTest {
         transport.complete(1, success());
 
         assertThatThrownBy(() -> export.toCompletableFuture().join())
-                .hasCauseInstanceOf(RuntimeException.class);
+                .hasStackTraceContaining("CLS export failed");
     }
 
     @Test

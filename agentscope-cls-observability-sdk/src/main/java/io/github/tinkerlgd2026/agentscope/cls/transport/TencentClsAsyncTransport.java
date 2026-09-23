@@ -5,9 +5,7 @@ import com.tencentcloudapi.cls.producer.Result;
 import com.tencentcloudapi.cls.producer.common.LogItem;
 import io.github.tinkerlgd2026.agentscope.cls.ClsObservabilityConfig;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -19,18 +17,8 @@ public final class TencentClsAsyncTransport implements ClsAsyncTransport {
                 || config.transportMode() != ClsObservabilityConfig.TransportMode.CLOUD) {
             throw new IllegalArgumentException("cloud configuration is required");
         }
-        char[] secretId = Objects.requireNonNull(config.secretId());
-        char[] secretKey = Objects.requireNonNull(config.secretKey());
-        char[] secretToken = config.secretToken().orElse(null);
-        try {
-            client = new AsyncProducerClient(TencentProducerConfigFactory.create(config));
-        } finally {
-            Arrays.fill(secretId, '\0');
-            Arrays.fill(secretKey, '\0');
-            if (secretToken != null) {
-                Arrays.fill(secretToken, '\0');
-            }
-        }
+        // Credentials are obtained and zeroed inside TencentProducerConfigFactory.
+        client = new AsyncProducerClient(TencentProducerConfigFactory.create(config));
     }
 
     @Override

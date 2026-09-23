@@ -11,21 +11,42 @@ public final class TencentProducerConfigFactory {
 
     public static AsyncProducerConfig create(ClsObservabilityConfig config) {
         Objects.requireNonNull(config, "config");
-        String source = localAddress();
-        String endpoint = Objects.requireNonNull(config.endpoint()).toString();
-        String accessKeyId = new String(Objects.requireNonNull(config.secretId()));
-        String accessKeySecret = new String(Objects.requireNonNull(config.secretKey()));
+        java.net.URI endpointUri = Objects.requireNonNull(config.endpoint(), "endpoint");
+        if (endpointUri.toString().isBlank()) {
+            throw new IllegalArgumentException("CLS endpoint is required");
+        }
+        String endpoint = endpointUri.toString();
+        char[] secretId = Objects.requireNonNull(config.secretId(), "secretId");
+        char[] secretKey = Objects.requireNonNull(config.secretKey(), "secretKey");
         char[] token = config.secretToken().orElse(null);
-        AsyncProducerConfig producer =
-                token == null
-                        ? new AsyncProducerConfig(
-                                endpoint, accessKeyId, accessKeySecret, source)
-                        : new AsyncProducerConfig(
-                                endpoint,
-                                accessKeyId,
-                                accessKeySecret,
-                                source,
-                                new String(token));
+        String source = localAddress();
+        try {
+            AsyncProducerConfig producer =
+                    token == null
+                            ? new AsyncProducerConfig(
+                                    endpoint,
+                                    new String(secretId),
+                                    new String(secretKey),
+                                    source)
+                            : new AsyncProducerConfig(
+                                    endpoint,
+                                    new String(secretId),
+                                    new String(secretKey),
+                                    source,
+                                    new String(token));
+            applyThresholds(producer, config);
+            return producer;
+        } finally {
+            java.util.Arrays.fill(secretId, '\0');
+            java.util.Arrays.fill(secretKey, '\0');
+            if (token != null) {
+                java.util.Arrays.fill(token, '\0');
+            }
+        }
+    }
+
+    private static void applyThresholds(
+            AsyncProducerConfig producer, ClsObservabilityConfig config) {
         producer.setBatchSizeThresholdInBytes(config.maxExportBatchBytes());
         producer.setBatchCountThreshold(config.maxExportBatchCount());
         producer.setLingerMs((int) config.producerLinger().toMillis());
@@ -34,7 +55,6 @@ public final class TencentProducerConfigFactory {
         // and leave retry policy to the caller: the SDK reports failures instead of re-sending.
         producer.setMaxBlockMs(0);
         producer.setRetries(0);
-        return producer;
     }
 
     private static String localAddress() {

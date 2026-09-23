@@ -17,6 +17,7 @@ import io.github.tinkerlgd2026.agentscope.cls.transport.ConsoleSpanSink;
 import io.github.tinkerlgd2026.agentscope.cls.transport.SpanSink;
 import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsAsyncTransport;
 import io.github.tinkerlgd2026.agentscope.cls.transport.TencentClsSpanSink;
+import io.github.tinkerlgd2026.agentscope.cls.transport.TencentExportBatchPlanner;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import java.net.InetAddress;
@@ -76,8 +77,7 @@ public final class ClsAgentObservability implements AutoCloseable {
                                 Objects.requireNonNull(config.topicId()),
                                 new TencentClsAsyncTransport(config),
                                 config.exportTimeout(),
-                                new io.github.tinkerlgd2026.agentscope.cls.transport
-                                        .TencentExportBatchPlanner(
+                                new TencentExportBatchPlanner(
                                         config.maxExportBatchBytes(),
                                         config.maxExportBatchCount()))
                         : new ConsoleSpanSink(objectMapper, System.out);

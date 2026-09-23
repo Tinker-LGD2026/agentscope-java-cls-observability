@@ -385,6 +385,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             if (lease != null) {
                 invocationRegistry.unregister(lease);
             }
+            // Frozen leases are terminal; never leak them into the waiting/active gauges.
+            activeStates.remove(state);
         }
     }
 
@@ -865,7 +867,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 ToolRegistry.ToolToken token =
                         state.toolRegistry()
                                 .startTool(agentFrame.agentId(), registryStepId, callId, name);
-                tokens.put(callId, token);
+                // Duplicate callIds keep the first (possibly active) token so its end event
+                // is never orphaned.
+                tokens.putIfAbsent(callId, token);
                 if (!token.active()) {
                     // Capacity/duplicate/malformed rejection: no span; later end/result
                     // events for this callId are consumed without side effects.
@@ -1039,17 +1043,16 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             }
             lifecycle.registerAgent(agentFrame.agentId(), agentSpan);
         }
+        Context spanContext = agentSpan.storeInContext(agentParent);
         if (existing == null && lifecycle != null) {
             generation =
                     new InvocationState.Generation(
-                            lifecycle,
-                            state.turnId(),
-                            entry,
-                            agentSpan,
-                            agentFrame,
-                            agentSpan.storeInContext(agentParent));
+                            lifecycle, state.turnId(), entry, agentSpan, agentFrame,
+                            spanContext);
             state.generation(generation);
-            state.firstAgentContext(generation.agentContext());
+            // The exact instance published to the reactor context below, so stale-context
+            // detection can use cheap identity with a value-equality fallback.
+            state.firstAgentContext(spanContext);
             activeStates.add(state);
         }
         Span inputEntry = entry;
@@ -1076,7 +1079,6 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         failure.getClass().getSimpleName());
             }
         }
-        Context spanContext = agentSpan.storeInContext(Objects.requireNonNull(agentParent));
         Span rootEntry = entry;
         if (existing == null) {
             ClsResumeContext resume = runtimeContext.get(ClsResumeContext.class);
@@ -1419,10 +1421,19 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         Context resolved = resolveOtelContext(reactorContext);
         InvocationState.Generation generation = state.generation();
         Context first = state.firstAgentContext();
-        if (generation != null
-                && first != null
-                && resolved == first
-                && generation.agentContext() != first) {
+        if (generation == null || first == null || generation.agentContext() == first) {
+            return resolved;
+        }
+        if (resolved == first && false) {
+            return generation.agentContext();
+        }
+        // storeInContext may re-wrap (e.g. BRIDGE/LEGACY_HOOK operators); fall back to
+        // SpanContext value equality so the substitution still applies.
+        io.opentelemetry.api.trace.SpanContext resolvedSpan =
+                io.opentelemetry.api.trace.Span.fromContext(resolved).getSpanContext();
+        io.opentelemetry.api.trace.SpanContext firstSpan =
+                io.opentelemetry.api.trace.Span.fromContext(first).getSpanContext();
+        if (resolvedSpan.equals(firstSpan)) {
             return generation.agentContext();
         }
         return resolved;

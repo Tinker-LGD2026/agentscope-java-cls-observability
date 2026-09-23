@@ -158,6 +158,13 @@ final class ControlEventTracker {
                     }
                 }
                 removeRecord(record);
+                if (rotatedToNotify != null) {
+                    // The rotated generation resumes full tracking: waits, timeouts and a
+                    // fresh pending-outcome slate.
+                    terminated = false;
+                    pendingControlOutcome = null;
+                    resultObserved = false;
+                }
             } else {
                 ControlScheduler.Cancellable timer = timers.remove(record.key());
                 if (timer != null) {
@@ -206,6 +213,8 @@ final class ControlEventTracker {
         timers.clear();
         reservations.values().forEach(InvocationCaptureBudget.Reservation::close);
         reservations.clear();
+        // No longer waiting on anything once every active wait is tombstoned/cancelled.
+        activeByKey.clear();
     }
 
     synchronized boolean waiting() {

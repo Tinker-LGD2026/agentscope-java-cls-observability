@@ -292,6 +292,113 @@ class ClsTracingMiddlewareHitlTest {
     }
 
     @Test
+    void resumedWorkAfterRotationLandsOnTheNewTrace() {
+        reactor.core.publisher.Sinks.Many<AgentEvent> sink =
+                reactor.core.publisher.Sinks.many().unicast().onBackpressureBuffer();
+        middleware
+                .onAgent(
+                        agent,
+                        validContext(),
+                        new AgentInput(List.of()),
+                        ignored ->
+                                middleware
+                                        .onModelCall(
+                                                agent,
+                                                validContext(),
+                                                new io.agentscope.core.middleware.ModelCallInput(
+                                                        List.of(), List.of(), null, model()),
+                                                ignoredModel -> sink.asFlux())
+                                        .concatWith(
+                                                // A fresh model-call callback evaluated only
+                                                // after the first flux terminates, i.e. after
+                                                // the timeout rotation below. (thenMany would
+                                                // discard the first flux's events, including
+                                                // the HITL wait.)
+                                                Flux.defer(
+                                                        () ->
+                                                                middleware.onModelCall(
+                                                                        agent,
+                                                                        validContext(),
+                                                                        new io.agentscope.core
+                                                                                .middleware
+                                                                                .ModelCallInput(
+                                                                                List.of(),
+                                                                                List.of(),
+                                                                                null,
+                                                                                model()),
+                                                                        resumed ->
+                                                                                Flux.just(
+                                                                                        resultEvent())))))
+                .subscribe();
+        sink.tryEmitNext(new RequireUserConfirmEvent("reply-1", toolCalls()));
+
+        // Old generation times out (200ms fixture), then the late result rotates.
+        SpanData oldEntry = entrySpan();
+        String oldTraceId = oldEntry.getTraceId();
+        sink.tryEmitNext(
+                new UserConfirmResultEvent(
+                        "reply-1", List.of(new ConfirmResult(true, toolCalls().get(0)))));
+        sink.tryEmitComplete();
+
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        SpanData resumedChat = null;
+        while (System.nanoTime() < deadline) {
+            resumedChat =
+                    exporter.getFinishedSpanItems().stream()
+                            .filter(
+                                    span ->
+                                            "chat"
+                                                    .equals(
+                                                            span.getAttributes()
+                                                                    .get(
+                                                                            AttributeKey
+                                                                                    .stringKey(
+                                                                            "gen_ai.span.kind"))))
+                            .filter(span -> !span.getTraceId().equals(oldTraceId))
+                            .findFirst()
+                            .orElse(null);
+            if (resumedChat != null) {
+                break;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        final SpanData chat = resumedChat;
+        org.assertj.core.api.Assertions.assertThat(chat)
+                .as("resumed chat span must land on the rotated trace")
+                .isNotNull();
+        assertThat(chat.getAttributes().get(AttributeKey.stringKey("gen_ai.turn.id")))
+                .isNotEqualTo(
+                        oldEntry.getAttributes().get(AttributeKey.stringKey("gen_ai.turn.id")));
+        // And it must hang under the rotated generation's agent span, not float as a root.
+        SpanData rotatedAgent =
+                exporter.getFinishedSpanItems().stream()
+                        .filter(
+                                span ->
+                                        "agent"
+                                                .equals(
+                                                        span.getAttributes()
+                                                                .get(
+                                                                        AttributeKey.stringKey(
+                                                                                "gen_ai.span.kind"))))
+                        .filter(span -> !span.getTraceId().equals(oldTraceId))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(chat.getParentSpanId()).isEqualTo(rotatedAgent.getSpanId());
+    }
+
+    private io.agentscope.core.model.Model model() {
+        io.agentscope.core.model.Model model =
+                mock(io.agentscope.core.model.Model.class);
+        when(model.getModelName()).thenReturn("model-x");
+        return model;
+    }
+
+    @Test
     void freezeEndsStuckInvocationWithShutdownOutcomeAndReleasesLease() {
         // A dedicated instance with a long wait timeout: the invocation must still be parked
         // in its HITL wait when the freeze lands (the shared fixture times out at 200ms).

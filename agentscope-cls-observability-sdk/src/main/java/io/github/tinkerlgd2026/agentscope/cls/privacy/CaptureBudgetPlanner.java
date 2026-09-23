@@ -154,7 +154,7 @@ public final class CaptureBudgetPlanner {
 
     private Map<String, Object> truncatedEnvelope(Map<?, ?> source, boolean complete) {
         Object payload = source.get("payload");
-        String preview = utf8Prefix(String.valueOf(payload), previewBytes);
+        String preview = utf8Prefix(payload == null ? "" : String.valueOf(payload), previewBytes);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("mode", "truncate");
         result.put("complete", complete);

@@ -122,7 +122,10 @@ public final class ClsBatchSpanProcessor implements SpanProcessor {
 
     @Override
     public void onEnd(ReadableSpan span) {
-        if (span == null || closed.get()) {
+        if (span == null) {
+            return;
+        }
+        if (closed.get()) {
             counters.dropped(1);
             return;
         }

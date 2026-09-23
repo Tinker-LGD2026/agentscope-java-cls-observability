@@ -63,6 +63,30 @@ final class ControlEventTracker {
             int maxRecords,
             LongSupplier ticker,
             InvocationCaptureBudget budget) {
+        this(
+                scheduler,
+                waitTimeout,
+                lease,
+                initialGeneration,
+                terminal,
+                maxRecords,
+                ticker,
+                budget,
+                null);
+    }
+
+    ControlEventTracker(
+            ControlScheduler scheduler,
+            Duration waitTimeout,
+            InvocationLease lease,
+            InvocationLifecycle initialGeneration,
+            TerminalReducer terminal,
+            int maxRecords,
+            LongSupplier ticker,
+            InvocationCaptureBudget budget,
+            java.util.function.@org.jspecify.annotations.Nullable Consumer<InvocationLifecycle>
+                    onRotation) {
+        this.onRotation = onRotation;
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.waitTimeout = Objects.requireNonNull(waitTimeout, "waitTimeout");
         this.lease = Objects.requireNonNull(lease, "lease");
@@ -76,6 +100,9 @@ final class ControlEventTracker {
         this.budget = Objects.requireNonNull(budget, "budget");
         generations.put(initialGeneration.generationId(), initialGeneration);
     }
+
+    private final java.util.function.@org.jspecify.annotations.Nullable Consumer<
+            InvocationLifecycle> onRotation;
 
     synchronized void onWait(
             ControlRecord.Kind kind, String agentId, String replyId, List<String> toolCallIds) {
@@ -111,33 +138,41 @@ final class ControlEventTracker {
                 scheduler.schedule(() -> onTimeout(record.key()), waitTimeout));
     }
 
-    synchronized void onResult(ControlRecord.Kind kind, String replyId) {
-        ControlRecord record = earliestMatch(kind, replyId);
-        if (record == null) {
-            unmatchedResults.incrementAndGet();
-            return;
-        }
-        if (record.tombstone()) {
-            // Late result: rotate exactly once per old generation; siblings reuse it.
-            InvocationLifecycle oldGeneration = generations.get(record.generationId());
-            if (oldGeneration != null) {
-                InvocationLifecycle rotated = lease.rotateFrom(oldGeneration);
-                if (rotated != null) {
-                    generations.putIfAbsent(rotated.generationId(), rotated);
-                    record.markTombstone(rotated.generationId());
-                }
+    void onResult(ControlRecord.Kind kind, String replyId) {
+        InvocationLifecycle rotatedToNotify = null;
+        synchronized (this) {
+            ControlRecord record = earliestMatch(kind, replyId);
+            if (record == null) {
+                unmatchedResults.incrementAndGet();
+                return;
             }
-            removeRecord(record);
-            return;
+            if (record.tombstone()) {
+                // Late result: rotate exactly once per old generation; siblings reuse it.
+                InvocationLifecycle oldGeneration = generations.get(record.generationId());
+                if (oldGeneration != null) {
+                    InvocationLifecycle rotated = lease.rotateFrom(oldGeneration);
+                    if (rotated != null) {
+                        generations.putIfAbsent(rotated.generationId(), rotated);
+                        record.markTombstone(rotated.generationId());
+                        rotatedToNotify = rotated;
+                    }
+                }
+                removeRecord(record);
+            } else {
+                ControlScheduler.Cancellable timer = timers.remove(record.key());
+                if (timer != null) {
+                    timer.cancel();
+                }
+                activeByKey.remove(record.key());
+                removeRecord(record);
+                waitCount++;
+                totalWaitNanos += Math.max(0L, ticker.getAsLong() - record.createdNanos());
+            }
         }
-        ControlScheduler.Cancellable timer = timers.remove(record.key());
-        if (timer != null) {
-            timer.cancel();
+        // Listener runs outside the monitor: span creation must not hold the tracker lock.
+        if (rotatedToNotify != null && onRotation != null) {
+            onRotation.accept(rotatedToNotify);
         }
-        activeByKey.remove(record.key());
-        removeRecord(record);
-        waitCount++;
-        totalWaitNanos += Math.max(0L, ticker.getAsLong() - record.createdNanos());
     }
 
     synchronized void onControlOutcome(TerminalOutcome outcome) {

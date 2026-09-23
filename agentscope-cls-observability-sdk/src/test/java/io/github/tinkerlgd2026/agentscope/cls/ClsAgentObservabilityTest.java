@@ -232,6 +232,24 @@ class ClsAgentObservabilityTest {
     }
 
     @Test
+    void detailedSnapshotExposesCountersAndGauges() {
+        RecordingSink sink = new RecordingSink();
+        ClsAgentObservability observability =
+                ClsAgentObservability.create(ClsObservabilityConfig.builder().build(), sink);
+
+        ClsDetailedTelemetrySnapshot detailed = observability.detailedSnapshot();
+        assertThat(detailed.acceptedSpans()).isZero();
+        assertThat(detailed.activeInvocations()).isZero();
+        assertThat(detailed.waitingInvocations()).isZero();
+        assertThat(detailed.flushFailures()).isZero();
+        assertThat(detailed.shutdownFailures()).isZero();
+
+        assertThat(observability.shutdown(Duration.ofSeconds(2))).isTrue();
+        assertThat(observability.detailedSnapshot().activeInvocations()).isZero();
+        observability.close();
+    }
+
+    @Test
     void shutdownRejectsNonPositiveTimeout() {
         ClsAgentObservability observability =
                 ClsAgentObservability.create(

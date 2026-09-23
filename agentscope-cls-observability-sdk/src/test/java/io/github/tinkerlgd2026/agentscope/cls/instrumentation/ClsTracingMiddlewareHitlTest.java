@@ -228,28 +228,115 @@ class ClsTracingMiddlewareHitlTest {
                                 .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
                 .isEqualTo("await_timeout");
 
-        // Late result arrives after termination: consumed without reviving old spans.
+        String oldTurnId =
+                entry.getAttributes().get(AttributeKey.stringKey("gen_ai.turn.id"));
+        String oldTraceId = entry.getTraceId();
+
+        // Late result arrives after termination: rotates exactly one new generation with a
+        // fresh entry/agent tree on a new trace, linked back to the timed-out turn.
         sink.tryEmitNext(
                 new UserConfirmResultEvent(
                         "reply-1", List.of(new ConfirmResult(true, toolCalls().get(0)))));
         sink.tryEmitNext(resultEvent());
         sink.tryEmitComplete();
 
-        long finished = exporter.getFinishedSpanItems().size();
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        List<SpanData> entries = List.of();
+        while (System.nanoTime() < deadline) {
+            entries =
+                    exporter.getFinishedSpanItems().stream()
+                            .filter(
+                                    span ->
+                                            "entry"
+                                                    .equals(
+                                                            span.getAttributes()
+                                                                    .get(
+                                                                            AttributeKey
+                                                                                    .stringKey(
+                                                                            "gen_ai.span.kind"))))
+                            .toList();
+            if (entries.size() == 2) {
+                break;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        assertThat(entries).hasSize(2);
+        SpanData rotated =
+                entries.stream()
+                        .filter(span -> !span.getTraceId().equals(oldTraceId))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("no rotated entry on a new trace"));
         assertThat(
-                        exporter.getFinishedSpanItems().stream()
-                                .filter(
-                                        span ->
-                                                "entry"
-                                                        .equals(
-                                                                span.getAttributes()
-                                                                        .get(
-                                                                                AttributeKey
-                                                                                        .stringKey(
-                                                                                "gen_ai.span.kind"))))
-                                .count())
-                .isEqualTo(1);
-        assertThat(finished).isGreaterThan(0);
+                        rotated.getAttributes()
+                                .get(
+                                        AttributeKey.stringKey(
+                                                "gen_ai.turn.resume_from_turn_id")))
+                .isEqualTo(oldTurnId);
+        assertThat(rotated.getAttributes().get(AttributeKey.stringKey("gen_ai.turn.id")))
+                .isNotEqualTo(oldTurnId);
+        // The old tree keeps its await_timeout terminal and is never revived.
+        SpanData oldEntry =
+                entries.stream()
+                        .filter(span -> span.getTraceId().equals(oldTraceId))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(
+                        oldEntry.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("await_timeout");
+    }
+
+    @Test
+    void freezeEndsStuckInvocationWithShutdownOutcomeAndReleasesLease() {
+        // A dedicated instance with a long wait timeout: the invocation must still be parked
+        // in its HITL wait when the freeze lands (the shared fixture times out at 200ms).
+        ClsTracingMiddleware longWaitMiddleware =
+                new ClsTracingMiddleware(
+                        provider.get("test"),
+                        new ContentSanitizer(
+                                new ObjectMapper(), ContentCaptureMode.TRUNCATE, 32 * 1024),
+                        new AtomicBoolean(true)::get,
+                        new io.github.tinkerlgd2026.agentscope.cls.internal.TelemetryCounters(),
+                        new ObjectMapper(),
+                        false,
+                        Duration.ofSeconds(30));
+        try {
+            reactor.core.publisher.Sinks.Many<AgentEvent> sink =
+                    reactor.core.publisher.Sinks.many().unicast().onBackpressureBuffer();
+            longWaitMiddleware
+                    .onAgent(
+                            agent,
+                            validContext(),
+                            new AgentInput(List.of()),
+                            ignored -> sink.asFlux())
+                    .subscribe();
+            sink.tryEmitNext(new RequireUserConfirmEvent("reply-1", toolCalls()));
+            // The invocation is parked in a HITL wait (lease active).
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (longWaitMiddleware.activeInvocationCount() == 0
+                    && System.nanoTime() < deadline) {
+                Thread.yield();
+            }
+            assertThat(longWaitMiddleware.activeInvocationCount()).isEqualTo(1);
+
+            longWaitMiddleware.freezeInvocations();
+        } finally {
+            longWaitMiddleware.close();
+        }
+
+        SpanData entry = entrySpan();
+        assertThat(
+                        entry.getAttributes()
+                                .get(AttributeKey.stringKey("gen_ai.turn.finish_reason")))
+                .isEqualTo("shutdown");
+        assertThat(entry.getAttributes().get(AttributeKey.booleanKey("gen_ai.incomplete")))
+                .isTrue();
+        assertThat(middleware.activeInvocationCount()).isZero();
     }
 
     private void run(Flux<AgentEvent> flow) {

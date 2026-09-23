@@ -99,6 +99,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final MiddlewareInvocationGuard invocationGuard;
     private final HostTraceLinker hostTraceLinker;
     private final ActiveInvocationRegistry invocationRegistry = new ActiveInvocationRegistry();
+    private final java.util.Set<InvocationState> activeStates =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.time.Duration hitlWaitTimeout;
     private volatile java.util.concurrent.ScheduledExecutorService controlScheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -370,10 +372,44 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         invocationRegistry.drain();
     }
 
-    /** FREEZE: forbid rotation across all leases; late events are only counted. */
+    /**
+     * FREEZE: forbid rotation everywhere, terminate every still-open generation with the
+     * shutdown outcome (children before parents, timers/tombstones cancelled, reservations
+     * released), and unregister the leases. Business fluxes keep running untouched.
+     */
     public void freezeInvocations() {
         invocationRegistry.freeze();
+        for (InvocationState state : List.copyOf(activeStates)) {
+            quietly(() -> freezeGeneration(state));
+            InvocationLease lease = state.lease();
+            if (lease != null) {
+                invocationRegistry.unregister(lease);
+            }
+        }
     }
+
+    private void freezeGeneration(InvocationState state) {
+        ControlEventTracker tracker = state.controlTracker();
+        if (tracker != null) {
+            tracker.cancelAll();
+        }
+        releaseControlPlane(state);
+        InvocationState.Generation generation = state.generation();
+        if (generation == null || !generation.ended().compareAndSet(false, true)) {
+            return;
+        }
+        applyTurnTerminal(
+                generation.agentSpan(),
+                generation.entrySpan(),
+                TerminalOutcome.SHUTDOWN,
+                false,
+                tracker);
+        applyPartialAndSummary(state, generation.agentSpan(), generation.entrySpan());
+        generation.agentFrame().applyTotals(generation.agentSpan());
+        generation.lifecycle().terminal(TerminalOutcome.SHUTDOWN, false, null);
+    }
+
+    /** Current number of active top-level invocation leases. */
 
     /** Waits until all registered leases terminate or the timeout expires. */
     public boolean awaitQuiescence(java.time.Duration timeout) {
@@ -384,6 +420,18 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     /** Current number of active top-level invocation leases. */
     public int activeInvocationCount() {
         return invocationRegistry.activeLeases();
+    }
+
+    /** Current number of active invocations parked in at least one HITL/external wait. */
+    public int waitingInvocationCount() {
+        int waiting = 0;
+        for (InvocationState state : activeStates) {
+            ControlEventTracker tracker = state.controlTracker();
+            if (tracker != null && tracker.waiting()) {
+                waiting++;
+            }
+        }
+        return waiting;
     }
 
     @Override
@@ -590,19 +638,26 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             Function<ReasoningInput, Flux<AgentEvent>> next,
             ContextView reactorContext) {
         InvocationState.StepFrame pendingStep = state.nextStep(agentFrame);
-        Context parent = resolveOtelContext(Objects.requireNonNull(reactorContext));
+        Context parent = resolveParentContext(state, reactorContext);
         Span span =
                 common(
                                 tracer.spanBuilder("react round_" + pendingStep.round())
                                         .setSpanKind(SpanKind.INTERNAL)
                                         .setParent(Objects.requireNonNull(parent)),
                                 state,
+                                currentTurnId(state),
                                 "step",
                                 "react")
                         .setAttribute(ClsFields.AGENT_ID, agentFrame.agentId())
                         .setAttribute(ClsFields.STEP_ID, pendingStep.stepId())
                         .setAttribute("gen_ai.react.round", (long) pendingStep.round())
                         .startSpan();
+        InvocationState.Generation reasoningGeneration = state.generation();
+        if (reasoningGeneration != null) {
+            reasoningGeneration
+                    .lifecycle()
+                    .registerStep(agentFrame.agentId(), pendingStep.stepId(), span);
+        }
         Context spanContext = span.storeInContext(Objects.requireNonNull(parent));
         pendingStep.bind(span, spanContext);
         agentFrame.currentStep(pendingStep);
@@ -663,14 +718,15 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         : input.model().getModelName();
         String providerName = inferProvider(modelName);
         agentFrame.modelContext(modelName, providerName);
-        state.recordProvider(providerName);
-        Context parent = resolveOtelContext(Objects.requireNonNull(reactorContext));
+        state.providerModelSummary().record(providerName, modelName);
+        Context parent = resolveParentContext(state, reactorContext);
         Span span =
                 common(
                                 tracer.spanBuilder("chat " + modelName)
                                         .setSpanKind(SpanKind.CLIENT)
                                         .setParent(Objects.requireNonNull(parent)),
                                 state,
+                                currentTurnId(state),
                                 "chat",
                                 "chat")
                         .setAttribute(ClsFields.AGENT_ID, agentFrame.agentId())
@@ -690,6 +746,12 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             span.setAttribute(
                     "gen_ai.input.messages.capture_error",
                     failure.getClass().getSimpleName());
+        }
+        InvocationState.Generation chatGeneration = state.generation();
+        if (chatGeneration != null) {
+            chatGeneration
+                    .lifecycle()
+                    .registerChat(step == null ? "unknown" : step.stepId(), span);
         }
         long started = System.nanoTime();
         OutputMessageAccumulator output =
@@ -712,6 +774,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             return Flux.error(exception);
         }
         AtomicBoolean completedNormally = new AtomicBoolean();
+        InvocationState.Generation terminateGeneration = state.generation();
         Flux<AgentEvent> observed =
                 terminate(
                         downstream
@@ -751,7 +814,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                             "gen_ai.output.messages",
                                                             node.toString()));
                             writeReasoningMetrics(span, result);
-                        });
+                        },
+                        terminateGeneration == null
+                                ? null
+                                : terminateGeneration.lifecycle());
         return propagate(observed, spanContext);
     }
 
@@ -765,8 +831,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 get(reactorContext, contextKeys.stepKey(), InvocationState.StepFrame.class);
         InvocationState.StepFrame fallbackStep =
                 contextualStep == null ? agentFrame.currentStep() : contextualStep;
-        Context fallbackParent = resolveOtelContext(Objects.requireNonNull(reactorContext));
+        Context fallbackParent = resolveParentContext(state, reactorContext);
         Map<String, List<ToolSpan>> tools = new LinkedHashMap<>();
+        Map<String, ToolRegistry.ToolToken> tokens = new LinkedHashMap<>();
         Set<InvocationState.StepFrame> actingSteps = new LinkedHashSet<>();
         List<ToolUseBlock> toolCalls = input.toolCalls() == null ? List.of() : input.toolCalls();
         agentFrame.addToolCalls(toolCalls.size());
@@ -791,6 +858,19 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 if (callStep != null) {
                     actingSteps.add(callStep);
                 }
+                String registryStepId =
+                        callStep != null
+                                ? callStep.stepId()
+                                : fallbackStep == null ? "unknown" : fallbackStep.stepId();
+                ToolRegistry.ToolToken token =
+                        state.toolRegistry()
+                                .startTool(agentFrame.agentId(), registryStepId, callId, name);
+                tokens.put(callId, token);
+                if (!token.active()) {
+                    // Capacity/duplicate/malformed rejection: no span; later end/result
+                    // events for this callId are consumed without side effects.
+                    continue;
+                }
                 Context parent =
                         callStep != null && callStep.spanContext() != null
                                 ? callStep.spanContext()
@@ -801,6 +881,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                 .setSpanKind(SpanKind.CLIENT)
                                                 .setParent(Objects.requireNonNull(parent)),
                                         state,
+                                        currentTurnId(state),
                                         "tool",
                                         "execute_tool")
                                 .setAttribute(ClsFields.AGENT_ID, agentFrame.agentId())
@@ -816,18 +897,25 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 if (callStep != null) {
                     span.setAttribute(ClsFields.STEP_ID, callStep.stepId());
                 }
+                InvocationState.Generation toolGeneration = state.generation();
+                if (toolGeneration != null) {
+                    toolGeneration.lifecycle().registerTool(registryStepId, callId, span);
+                }
                 capture(span, "gen_ai.tool.call.arguments", call.getInput());
-                tools.computeIfAbsent(callId, ignored -> new ArrayList<>())
-                        .add(
-                                new ToolSpan(
-                                        span,
-                                        System.nanoTime(),
-                                        contentSanitizer,
-                                        canonicalWriter,
-                                        this::telemetryFailed));
+                ToolSpan toolSpan =
+                        new ToolSpan(
+                                span,
+                                System.nanoTime(),
+                                contentSanitizer,
+                                canonicalWriter,
+                                this::telemetryFailed);
+                if (toolGeneration != null) {
+                    toolGeneration.lifecycle().registerFinalizer(toolSpan::finalizeMetrics);
+                }
+                tools.computeIfAbsent(callId, ignored -> new ArrayList<>()).add(toolSpan);
             }
         } catch (RuntimeException | StackOverflowError failure) {
-            failTools(tools, failure);
+            failTools(tools, tokens, failure);
             finishStepsError(actingSteps, "error", failure);
             clearToolSteps(agentFrame, tools);
             throw failure;
@@ -838,19 +926,21 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         } catch (RuntimeException | Error exception) {
             quietly(
                     () -> {
-                        failTools(tools, exception);
+                        failTools(tools, tokens, exception);
                         finishStepsError(actingSteps, "error", exception);
                         clearToolSteps(agentFrame, tools);
                     });
             return Flux.error(exception);
         }
         return downstream
-                .doOnNext(event -> quietly(() -> applyToolEvent(tools, event)))
+                .doOnNext(event -> quietly(() -> applyToolEvent(tools, tokens, event)))
                 .doOnComplete(
                         () ->
                                 quietly(
                                         () -> {
                                             forEachTool(tools, tool -> tool.success());
+                                            tokens.values()
+                                                    .forEach(token -> token.end(true));
                                             actingSteps.forEach(
                                                     step -> step.finishSuccess("tool_calls"));
                                             clearToolSteps(agentFrame, tools);
@@ -859,7 +949,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         error ->
                                 quietly(
                                         () -> {
-                                            failTools(tools, error);
+                                            failTools(tools, tokens, error);
                                             finishStepsError(actingSteps, "error", error);
                                             clearToolSteps(agentFrame, tools);
                                         }))
@@ -868,6 +958,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                 quietly(
                                         () -> {
                                             forEachTool(tools, tool -> tool.cancel());
+                                            tokens.values()
+                                                    .forEach(token -> token.end(false));
                                             finishStepsError(actingSteps, "cancelled", null);
                                             clearToolSteps(agentFrame, tools);
                                         }));
@@ -886,7 +978,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 state.newAgentFrame(agent.getAgentId(), agent.getName());
         List<io.agentscope.core.message.Msg> agentMessages =
                 input.msgs() == null ? List.of() : input.msgs();
-        Context parent = resolveOtelContext(Objects.requireNonNull(reactorContext));
+        Context parent =
+                existing == null
+                        ? resolveOtelContext(Objects.requireNonNull(reactorContext))
+                        : resolveParentContext(state, reactorContext);
         Span entry = null;
         Context agentParent = parent;
         // Captured before any CLS context write; readSnapshot returns the immutable write-once
@@ -905,6 +1000,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             }
             state.bindLease(rootLease);
         }
+        InvocationState.Generation generation = null;
         if (existing == null) {
             entry =
                     common(
@@ -913,6 +1009,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                     .setSpanKind(SpanKind.INTERNAL),
                                             hostSnapshot),
                                     state,
+                                    state.turnId(),
                                     "entry",
                                     "enter_application")
                             .setAttribute("gen_ai.entry.type", state.entryType())
@@ -927,12 +1024,34 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         .setSpanKind(SpanKind.INTERNAL)
                                         .setParent(Objects.requireNonNull(agentParent)),
                                 state,
+                                currentTurnId(state),
                                 "agent",
                                 "invoke_agent")
                         .setAttribute(ClsFields.AGENT_ID, agentFrame.agentId())
                         .setAttribute(ClsFields.AGENT_NAME, agentFrame.agentName())
                         .setAttribute("gen_ai.agent.message_count", (long) agentMessages.size())
                         .startSpan();
+        InvocationLease boundLease = state.lease();
+        InvocationLifecycle lifecycle = boundLease == null ? null : boundLease.current();
+        if (lifecycle != null) {
+            if (entry != null) {
+                lifecycle.registerEntry(entry);
+            }
+            lifecycle.registerAgent(agentFrame.agentId(), agentSpan);
+        }
+        if (existing == null && lifecycle != null) {
+            generation =
+                    new InvocationState.Generation(
+                            lifecycle,
+                            state.turnId(),
+                            entry,
+                            agentSpan,
+                            agentFrame,
+                            agentSpan.storeInContext(agentParent));
+            state.generation(generation);
+            state.firstAgentContext(generation.agentContext());
+            activeStates.add(state);
+        }
         Span inputEntry = entry;
         try {
             if (inputEntry == null) {
@@ -1012,19 +1131,16 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                         controlTracker.cancelAll();
                                                         releaseControlPlane(state);
                                                         endAgentTreeOutcome(
-                                                                ended,
-                                                                agentSpan,
-                                                                rootEntry,
-                                                                agentFrame,
+                                                                state,
                                                                 resolution.outcome(),
                                                                 resolution.completed(),
                                                                 null,
                                                                 controlTracker);
                                                     } else {
                                                         endAgentTree(
+                                                                state,
                                                                 ended,
                                                                 agentSpan,
-                                                                rootEntry,
                                                                 agentFrame,
                                                                 null,
                                                                 false);
@@ -1039,10 +1155,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                         controlTracker.cancelAll();
                                                         releaseControlPlane(state);
                                                         endAgentTreeOutcome(
-                                                                ended,
-                                                                agentSpan,
-                                                                rootEntry,
-                                                                agentFrame,
+                                                                state,
                                                                 TerminalOutcome.ERROR,
                                                                 controlTracker
                                                                         .resolveOnComplete()
@@ -1051,9 +1164,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                                 controlTracker);
                                                     } else {
                                                         endAgentTree(
+                                                                state,
                                                                 ended,
                                                                 agentSpan,
-                                                                rootEntry,
                                                                 agentFrame,
                                                                 error,
                                                                 false);
@@ -1068,10 +1181,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                         controlTracker.cancelAll();
                                                         releaseControlPlane(state);
                                                         endAgentTreeOutcome(
-                                                                ended,
-                                                                agentSpan,
-                                                                rootEntry,
-                                                                agentFrame,
+                                                                state,
                                                                 TerminalOutcome.CANCELLED,
                                                                 controlTracker
                                                                         .resolveOnComplete()
@@ -1080,9 +1190,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                                 controlTracker);
                                                     } else {
                                                         endAgentTree(
+                                                                state,
                                                                 ended,
                                                                 agentSpan,
-                                                                rootEntry,
                                                                 agentFrame,
                                                                 null,
                                                                 true);
@@ -1091,11 +1201,15 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         boolean publishSnapshot = existing == null;
         if (existing == null) {
             InvocationLease registeredLease = state.lease();
-            if (registeredLease != null) {
-                observed =
-                        observed.doFinally(
-                                signal -> invocationRegistry.unregister(registeredLease));
-            }
+            InvocationState registeredState = state;
+            observed =
+                    observed.doFinally(
+                            signal -> {
+                                if (registeredLease != null) {
+                                    invocationRegistry.unregister(registeredLease);
+                                }
+                                activeStates.remove(registeredState);
+                            });
         }
         return propagate(observed, spanContext)
                 .contextWrite(
@@ -1275,15 +1389,98 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     }
 
     private static SpanBuilder common(
-            SpanBuilder builder, InvocationState state, String spanKind, String operationName) {
+            SpanBuilder builder,
+            InvocationState state,
+            String turnId,
+            String spanKind,
+            String operationName) {
         return Objects.requireNonNull(builder)
                 .setAttribute(ClsFields.SPAN_KIND, Objects.requireNonNull(spanKind))
                 .setAttribute(ClsFields.OPERATION_NAME, Objects.requireNonNull(operationName))
                 .setAttribute(ClsFields.AGENT_TYPE, Objects.requireNonNull(state.agentType()))
                 .setAttribute(ClsFields.SESSION_ID, Objects.requireNonNull(state.sessionId()))
-                .setAttribute(ClsFields.TURN_ID, Objects.requireNonNull(state.turnId()))
+                .setAttribute(ClsFields.TURN_ID, Objects.requireNonNull(turnId))
                 .setAttribute(ClsFields.USER_ID, Objects.requireNonNull(state.userId()))
                 .setAttribute(ClsFields.USER_NAME, Objects.requireNonNull(state.userName()));
+    }
+
+    private static String currentTurnId(InvocationState state) {
+        InvocationState.Generation generation = state.generation();
+        return generation == null ? state.turnId() : generation.turnId();
+    }
+
+    /**
+     * Resolves the parent context for nested callbacks. After a timeout rotation the reactor
+     * context still carries the finished generation's span context; substitute the current
+     * generation's context so resumed work lands on the new trace. Contexts of nested
+     * sub-agents differ from the first generation's root context and pass through unchanged.
+     */
+    private Context resolveParentContext(InvocationState state, ContextView reactorContext) {
+        Context resolved = resolveOtelContext(reactorContext);
+        InvocationState.Generation generation = state.generation();
+        Context first = state.firstAgentContext();
+        if (generation != null
+                && first != null
+                && resolved == first
+                && generation.agentContext() != first) {
+            return generation.agentContext();
+        }
+        return resolved;
+    }
+
+    /**
+     * Rotated generations start a new turn and trace: new entry (root, resume-linked to the
+     * timed-out turn) and agent spans replace the live tree. The old generation is already
+     * FINISHED (lease precondition), so its spans are never touched again.
+     */
+    private void rotateGeneration(InvocationState state, InvocationLifecycle rotatedLifecycle) {
+        InvocationState.Generation old = state.generation();
+        if (old == null || rotatedLifecycle == null) {
+            return;
+        }
+        String newTurnId =
+                IdentityNormalizer.bounded(
+                        old.turnId() + ":r:" + UUID.randomUUID().toString().replace("-", ""),
+                        IdentityNormalizer.TURN_ID_MAX_BYTES);
+        InvocationState.AgentFrame frame = old.agentFrame();
+        Span newEntry =
+                common(
+                                hostTraceLinker.apply(
+                                        tracer.spanBuilder("enter_application")
+                                                .setSpanKind(SpanKind.INTERNAL),
+                                        null),
+                                state,
+                                newTurnId,
+                                "entry",
+                                "enter_application")
+                        .setAttribute("gen_ai.entry.type", state.entryType())
+                        .setAttribute(
+                                "observed_time_unix_nano", Long.toString(epochNanos()))
+                        .setAttribute(ClsFields.TURN_RESUME_FROM_TURN_ID, old.turnId())
+                        .startSpan();
+        rotatedLifecycle.registerEntry(newEntry);
+        Context entryContext = newEntry.storeInContext(Objects.requireNonNull(Context.root()));
+        Span newAgentSpan =
+                common(
+                                tracer.spanBuilder("invoke_agent " + frame.agentName())
+                                        .setSpanKind(SpanKind.INTERNAL)
+                                        .setParent(entryContext),
+                                state,
+                                newTurnId,
+                                "agent",
+                                "invoke_agent")
+                        .setAttribute(ClsFields.AGENT_ID, frame.agentId())
+                        .setAttribute(ClsFields.AGENT_NAME, frame.agentName())
+                        .startSpan();
+        rotatedLifecycle.registerAgent(frame.agentId(), newAgentSpan);
+        state.generation(
+                new InvocationState.Generation(
+                        rotatedLifecycle,
+                        newTurnId,
+                        newEntry,
+                        newAgentSpan,
+                        frame,
+                        newAgentSpan.storeInContext(entryContext)));
     }
 
     private void capture(Span span, String key, Object value) {
@@ -1378,7 +1575,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 .ifPresent(value -> span.setAttribute(ClsFields.RESPONSE_TTFT_MS, value));
     }
 
-    private static void applyToolEvent(Map<String, List<ToolSpan>> tools, AgentEvent event) {
+    private static void applyToolEvent(
+            Map<String, List<ToolSpan>> tools,
+            Map<String, ToolRegistry.ToolToken> tokens,
+            AgentEvent event) {
         if (event instanceof ToolResultTextDeltaEvent text) {
             tools.getOrDefault(text.getToolCallId(), List.of())
                     .forEach(tool -> tool.appendText(text.getDelta()));
@@ -1393,11 +1593,16 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             return;
         }
         List<ToolSpan> matching = tools.getOrDefault(result.getToolCallId(), List.of());
-        if (result.getState() == ToolResultState.SUCCESS) {
+        boolean success = result.getState() == ToolResultState.SUCCESS;
+        if (success) {
             matching.forEach(tool -> tool.success());
         } else {
             String type = result.getState() == null ? "tool_error" : result.getState().getValue();
             matching.forEach(tool -> tool.error(type, null));
+        }
+        ToolRegistry.ToolToken token = tokens.get(result.getToolCallId());
+        if (token != null) {
+            token.end(success);
         }
     }
 
@@ -1406,8 +1611,12 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         tools.values().forEach(spans -> spans.forEach(action));
     }
 
-    private static void failTools(Map<String, List<ToolSpan>> tools, Throwable error) {
+    private static void failTools(
+            Map<String, List<ToolSpan>> tools,
+            Map<String, ToolRegistry.ToolToken> tokens,
+            Throwable error) {
         forEachTool(tools, tool -> tool.error("tool execution failed", error));
+        tokens.values().forEach(token -> token.end(false));
     }
 
     private static void finishStepsError(
@@ -1421,8 +1630,24 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     }
 
     private Flux<AgentEvent> terminate(
-            Flux<AgentEvent> downstream, Span span, String errorDescription, Runnable beforeEnd) {
+            Flux<AgentEvent> downstream,
+            Span span,
+            String errorDescription,
+            Runnable beforeEnd,
+            @Nullable InvocationLifecycle lifecycle) {
         AtomicBoolean ended = new AtomicBoolean();
+        AtomicBoolean finalized = new AtomicBoolean();
+        Runnable finalizer =
+                () -> {
+                    if (finalized.compareAndSet(false, true)) {
+                        beforeEnd.run();
+                    }
+                };
+        if (lifecycle != null) {
+            // A generation terminal (cancel/freeze/shutdown) may win over this span's own
+            // cancel handler; the registered finalizer keeps metrics lossless either way.
+            lifecycle.registerFinalizer(finalizer);
+        }
         return downstream
                 .doOnComplete(
                         () -> {
@@ -1430,7 +1655,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                 finishSpan(
                                         span,
                                         () -> {
-                                            beforeEnd.run();
+                                            finalizer.run();
                                             span.setStatus(StatusCode.OK);
                                         });
                             }
@@ -1442,7 +1667,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         span,
                                         () -> {
                                             try {
-                                                beforeEnd.run();
+                                                finalizer.run();
                                             } finally {
                                                 markError(span, errorDescription, error);
                                             }
@@ -1456,7 +1681,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         span,
                                         () -> {
                                             try {
-                                                beforeEnd.run();
+                                                finalizer.run();
                                             } finally {
                                                 span.setStatus(StatusCode.ERROR, "cancelled");
                                                 span.setAttribute("error.type", "cancelled");
@@ -1508,14 +1733,12 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         () -> {
                                             finishOpenStep(
                                                     agentFrame, outcome.finishReason(), null);
-                                            // Advance the generation state machine first so
-                                            // late results can rotate; spans follow.
-                                            lifecycle.terminal(outcome, resultObserved, null);
+                                            // The reducer terminal resolves the CURRENT
+                                            // generation; its lifecycle ends the spans and
+                                            // marks the generation FINISHED so a late result
+                                            // may rotate.
                                             endAgentTreeOutcome(
-                                                    ended,
-                                                    agentSpan,
-                                                    rootEntry,
-                                                    agentFrame,
+                                                    state,
                                                     outcome,
                                                     resultObserved,
                                                     null,
@@ -1523,7 +1746,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                         }),
                         1024,
                         System::nanoTime,
-                        controlBudget);
+                        controlBudget,
+                        rotated -> quietly(() -> rotateGeneration(state, rotated)));
         state.bindControlPlane(lease, tracker, controlBudget);
         return tracker;
     }
@@ -1602,29 +1826,82 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     }
 
     private void endAgentTreeOutcome(
-            AtomicBoolean ended,
-            Span agent,
-            @Nullable Span entry,
-            InvocationState.AgentFrame agentFrame,
+            InvocationState state,
             TerminalOutcome outcome,
             boolean resultObserved,
             @Nullable Throwable error,
             @Nullable ControlEventTracker tracker) {
-        if (!ended.compareAndSet(false, true)) {
+        InvocationState.Generation generation = state.generation();
+        if (generation == null || !generation.ended().compareAndSet(false, true)) {
             return;
         }
+        Span agent = generation.agentSpan();
+        Span entry = generation.entrySpan();
         applyTurnTerminal(agent, entry, outcome, resultObserved, tracker);
-        finishSpan(
-                agent,
-                () -> {
-                    try {
-                        agentFrame.applyTotals(agent);
-                    } finally {
-                        applyOutcomeStatus(agent, outcome, error);
-                    }
-                });
+        applyPartialAndSummary(state, agent, entry);
+        try {
+            generation.agentFrame().applyTotals(agent);
+        } finally {
+            applyOutcomeStatus(agent, outcome, error);
+        }
         if (entry != null) {
-            finishSpan(entry, () -> applyOutcomeStatus(entry, outcome, error));
+            applyOutcomeStatus(entry, outcome, error);
+        }
+        // The lifecycle owns Span.end(): every registered child ends before its parents,
+        // exactly once, and the generation becomes FINISHED so a late result may rotate.
+        generation.lifecycle().terminal(outcome, resultObserved, error);
+    }
+
+    /** Partial-failure and provider/model summary attributes on terminal agent/entry spans. */
+    private void applyPartialAndSummary(InvocationState state, Span... spans) {
+        ToolRegistry registry = state.toolRegistry();
+        ProviderModelSummary summary = state.providerModelSummary();
+        long failedTools = registry.failedToolCount();
+        long capacityRejected = registry.capacityRejectedTools();
+        long duplicateRejected = registry.duplicateRejectedTools();
+        long malformedRejected = registry.malformedRejectedTools();
+        List<String> providers = summary.providers();
+        List<String> models = summary.models();
+        for (Span span : spans) {
+            if (span == null) {
+                continue;
+            }
+            if (failedTools > 0) {
+                span.setAttribute(ClsFields.PARTIAL_FAILURE, true);
+                span.setAttribute(ClsFields.FAILED_TOOL_COUNT, failedTools);
+            }
+            if (capacityRejected > 0) {
+                span.setAttribute("agentscope.tools.capacity_rejected", capacityRejected);
+            }
+            if (duplicateRejected > 0) {
+                span.setAttribute("agentscope.tools.duplicate_rejected", duplicateRejected);
+            }
+            if (malformedRejected > 0) {
+                span.setAttribute("agentscope.tools.malformed_rejected", malformedRejected);
+            }
+            if (!providers.isEmpty()) {
+                span.setAttribute(
+                        Objects.requireNonNull(
+                                AttributeKey.stringArrayKey("gen_ai.provider.names")),
+                        providers);
+                span.setAttribute("gen_ai.provider.count", (long) providers.size());
+                if (providers.size() == 1) {
+                    span.setAttribute("gen_ai.provider.name", providers.get(0));
+                }
+            }
+            if (!models.isEmpty()) {
+                span.setAttribute(
+                        Objects.requireNonNull(
+                                AttributeKey.stringArrayKey("gen_ai.request.models")),
+                        models);
+                span.setAttribute("gen_ai.request.model_count", (long) models.size());
+                if (models.size() == 1) {
+                    span.setAttribute("gen_ai.request.model", models.get(0));
+                }
+            }
+            if (summary.overflowed()) {
+                span.setAttribute("agentscope.telemetry.truncated", true);
+            }
         }
     }
 
@@ -1678,9 +1955,9 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     }
 
     private void endAgentTree(
+            InvocationState state,
             AtomicBoolean ended,
             Span agent,
-            @Nullable Span entry,
             InvocationState.AgentFrame agentFrame,
             @Nullable Throwable error,
             boolean cancelled) {
@@ -1692,15 +1969,11 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 () -> {
                     try {
                         agentFrame.applyTotals(agent);
+                        applyPartialAndSummary(state, agent);
                     } finally {
                         markTreeStatus(agent, "agent invocation failed", error, cancelled);
                     }
                 });
-        if (entry != null) {
-            finishSpan(
-                    entry,
-                    () -> markTreeStatus(entry, "application entry failed", error, cancelled));
-        }
     }
 
     private static void markTreeStatus(

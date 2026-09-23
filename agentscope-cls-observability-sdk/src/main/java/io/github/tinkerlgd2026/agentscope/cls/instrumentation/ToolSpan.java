@@ -36,6 +36,7 @@ final class ToolSpan {
     private final StringBuilder textResult = new StringBuilder();
     private final StreamingDigest digest;
     private final AtomicBoolean ended = new AtomicBoolean();
+    private final AtomicBoolean metricsFinalized = new AtomicBoolean();
     private int accumulatedBytes;
     private boolean hasText;
     private boolean truncated;
@@ -109,16 +110,28 @@ final class ToolSpan {
         }
     }
 
+    /**
+     * Flushes accumulated result metrics and duration exactly once. Shared between the span's
+     * own end paths and the generation-lifecycle finalizer, so a terminal that wins the
+     * cancellation race cannot drop tool metrics.
+     */
+    void finalizeMetrics() {
+        if (!metricsFinalized.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            finishResult();
+        } finally {
+            setDuration(span, "gen_ai.tool.call.duration_ms", startedNanos);
+        }
+    }
+
     void success() {
         if (ended.compareAndSet(false, true)) {
             finishSpan(
                     () -> {
-                        try {
-                            finishResult();
-                        } finally {
-                            setDuration(span, "gen_ai.tool.call.duration_ms", startedNanos);
-                            span.setStatus(StatusCode.OK);
-                        }
+                        finalizeMetrics();
+                        span.setStatus(StatusCode.OK);
                     });
         }
     }
@@ -128,9 +141,8 @@ final class ToolSpan {
             finishSpan(
                     () -> {
                         try {
-                            finishResult();
+                            finalizeMetrics();
                         } finally {
-                            setDuration(span, "gen_ai.tool.call.duration_ms", startedNanos);
                             span.setAttribute("gen_ai.tool.error.type", type);
                             span.setAttribute("error.type", type);
                             span.setStatus(StatusCode.ERROR, "tool execution failed");

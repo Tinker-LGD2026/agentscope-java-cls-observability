@@ -260,6 +260,21 @@ public final class ClsAgentObservability implements AutoCloseable {
         return counters.snapshot();
     }
 
+    /**
+     * Detailed telemetry: per-category counters plus active/waiting invocation gauges read at
+     * call time. All counter values are monotonic longs; the legacy {@link #snapshot()}
+     * aggregates export/flush/shutdown failures for 0.2 compatibility.
+     */
+    public ClsDetailedTelemetrySnapshot detailedSnapshot() {
+        int active = 0;
+        int waiting = 0;
+        if (middleware instanceof LifecycleMiddleware lifecycle) {
+            active = lifecycle.activeInvocations();
+            waiting = lifecycle.waitingInvocations();
+        }
+        return counters.detailedSnapshot(active, waiting);
+    }
+
     /** Equivalent to {@code shutdown(shutdownTimeout)}; failures are counted, never thrown. */
     @Override
     public void close() {
@@ -297,6 +312,14 @@ public final class ClsAgentObservability implements AutoCloseable {
 
         private void deactivate() {
             active.set(false);
+        }
+
+        private int activeInvocations() {
+            return delegate.activeInvocationCount();
+        }
+
+        private int waitingInvocations() {
+            return delegate.waitingInvocationCount();
         }
 
         private void release() {

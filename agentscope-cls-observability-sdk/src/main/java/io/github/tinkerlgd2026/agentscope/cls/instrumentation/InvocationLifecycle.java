@@ -7,6 +7,7 @@ import io.opentelemetry.api.trace.StatusCode;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jspecify.annotations.Nullable;
@@ -34,6 +35,7 @@ final class InvocationLifecycle {
     private final List<Span> stepSpans = new CopyOnWriteArrayList<>();
     private final List<Span> agentSpans = new CopyOnWriteArrayList<>();
     private final AtomicReference<Span> entrySpan = new AtomicReference<>();
+    private final List<SpanFinalizer> finalizers = new CopyOnWriteArrayList<>();
 
     String generationId() {
         return generationId;
@@ -101,6 +103,24 @@ final class InvocationLifecycle {
         endImmediately(span);
     }
 
+    /**
+     * Registers a metrics/attributes finalizer for a span (e.g. streamed chat output or tool
+     * results). Finalizers run exactly once: at terminal before the span ends, or immediately
+     * when registered after the terminal began. Cancellation travels upstream, so the
+     * generation terminal may win over a child span's own cancel handler; finalizers make
+     * that race lossless.
+     */
+    void registerFinalizer(Runnable finalizer) {
+        SpanFinalizer wrapper = new SpanFinalizer(finalizer);
+        synchronized (registrationLock) {
+            if (acceptsRegistrations()) {
+                finalizers.add(wrapper);
+                return;
+            }
+        }
+        wrapper.run();
+    }
+
     private boolean acceptsRegistrations() {
         return state.get() == State.OPEN;
     }
@@ -123,6 +143,9 @@ final class InvocationLifecycle {
             // Holding the registration lock makes registrations race-free with termination:
             // a span is either in the lists before the scan or ended immediately afterwards.
             synchronized (registrationLock) {
+                for (SpanFinalizer finalizer : finalizers) {
+                    finalizer.run();
+                }
                 for (Span span : chatAndToolSpans) {
                     endQuietly(span, outcome, error);
                 }
@@ -149,6 +172,26 @@ final class InvocationLifecycle {
             state.set(State.FINISHED);
         }
         return true;
+    }
+
+    private static final class SpanFinalizer {
+        private final Runnable delegate;
+        private final AtomicBoolean ran = new AtomicBoolean();
+
+        private SpanFinalizer(Runnable delegate) {
+            this.delegate = delegate;
+        }
+
+        private void run() {
+            if (!ran.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                delegate.run();
+            } catch (RuntimeException | StackOverflowError ignored) {
+                // Metrics finalizers are best-effort; the span still ends.
+            }
+        }
     }
 
     private static void endImmediately(Span span) {

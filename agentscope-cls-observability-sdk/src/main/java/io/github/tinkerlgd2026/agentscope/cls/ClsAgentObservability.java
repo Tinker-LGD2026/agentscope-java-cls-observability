@@ -149,7 +149,8 @@ public final class ClsAgentObservability implements AutoCloseable {
                         active::get,
                         counters,
                         objectMapper,
-                        config.reactorContextHookEnabled(),
+                        config.reactorContextMode(),
+                        config.hostTraceLinkEnabled(),
                         config.hitlWaitTimeout());
         return new ClsAgentObservability(
                 provider, spanProcessor, new LifecycleMiddleware(middleware, active), counters);

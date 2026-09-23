@@ -223,6 +223,7 @@ public final class ClsBatchSpanProcessor implements SpanProcessor {
             while ((batch = queue.pollBatch(maxExportBatchCount, maxExportBatchBytes)) != null) {
                 long remainingMillis = remainingMillis(deadlineNanos);
                 if (remainingMillis <= 0) {
+                    counters.dropped(batch.records().size());
                     batch.close();
                     return;
                 }
@@ -232,7 +233,8 @@ public final class ClsBatchSpanProcessor implements SpanProcessor {
                             .toCompletableFuture()
                             .get(remainingMillis, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException exception) {
-                    batch.close();
+                    counters.dropped(batch.records().size());
+                    batch.abandon();
                     Thread.currentThread().interrupt();
                     return;
                 } catch (Exception exception) {
@@ -240,9 +242,10 @@ public final class ClsBatchSpanProcessor implements SpanProcessor {
                             "CLS span batch export failed: {}",
                             exception.getClass().getSimpleName());
                     if (exception instanceof java.util.concurrent.TimeoutException) {
-                        // The completion callback releases the batch as well; close is
-                        // idempotent, so an abandoned stage cannot leak its reservation.
-                        batch.close();
+                        // Abandon releases the reservation immediately and prevents a late
+                        // completion from being counted as accepted.
+                        counters.dropped(batch.records().size());
+                        batch.abandon();
                         return;
                     }
                 }

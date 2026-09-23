@@ -105,6 +105,7 @@ public final class EncodedSpanQueue implements AutoCloseable {
         private final List<Entry> entries;
         private final long bytes;
         private final AtomicBoolean released = new AtomicBoolean();
+        private volatile boolean abandoned;
 
         private Batch(List<Entry> entries, long bytes) {
             this.entries = entries;
@@ -117,6 +118,16 @@ public final class EncodedSpanQueue implements AutoCloseable {
 
         public long bytes() {
             return bytes;
+        }
+
+        /** Marks the batch as abandoned by the waiter; a late completion must not count it. */
+        public void abandon() {
+            abandoned = true;
+            close();
+        }
+
+        public boolean wasAbandoned() {
+            return abandoned;
         }
 
         @Override

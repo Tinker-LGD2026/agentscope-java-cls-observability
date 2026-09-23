@@ -30,6 +30,7 @@ class ClsBatchSpanProcessorTest {
         assertThat(fixture.records()).hasSize(1);
         assertThat(fixture.counters.snapshot().acceptedSpans()).isEqualTo(1);
         assertThat(fixture.pool.usedBytes()).isZero();
+        fixture.scheduler.assertNoTaskFailures();
     }
 
     @Test
@@ -42,6 +43,7 @@ class ClsBatchSpanProcessorTest {
         fixture.scheduler.runPending();
 
         assertThat(fixture.records()).hasSize(2);
+        fixture.scheduler.assertNoTaskFailures();
     }
 
     @Test
@@ -51,6 +53,7 @@ class ClsBatchSpanProcessorTest {
         fixture.scheduler.runPending();
 
         assertThat(fixture.records()).hasSize(1);
+        fixture.scheduler.assertNoTaskFailures();
     }
 
     @Test
@@ -95,6 +98,7 @@ class ClsBatchSpanProcessorTest {
         assertThat(fixture.records()).hasSize(1);
         assertThat(fixture.counters.snapshot().invalidSpans()).isEqualTo(1);
         assertThat(fixture.counters.snapshot().acceptedSpans()).isEqualTo(1);
+        fixture.scheduler.assertNoTaskFailures();
     }
 
     @Test
@@ -125,8 +129,9 @@ class ClsBatchSpanProcessorTest {
 
         assertThat(success).isFalse();
         assertThat(elapsedMillis).isLessThan(5_000L);
-        // The abandoned batch reservation was released rather than leaked.
+        // The abandoned batch reservation was released and counted as dropped.
         assertThat(fixture.pool.usedBytes()).isZero();
+        assertThat(fixture.counters.snapshot().droppedSpans()).isEqualTo(1);
     }
 
     @Test

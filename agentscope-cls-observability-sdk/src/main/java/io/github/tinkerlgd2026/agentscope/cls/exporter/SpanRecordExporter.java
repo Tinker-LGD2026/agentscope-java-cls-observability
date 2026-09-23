@@ -41,7 +41,13 @@ public final class SpanRecordExporter implements AutoCloseable {
         CompletableFuture<Boolean> result = new CompletableFuture<>();
         stage.whenComplete(
                 (ignored, error) -> {
+                    boolean abandoned = batch.wasAbandoned();
                     batch.close();
+                    if (abandoned) {
+                        // The waiter already counted these records as dropped.
+                        result.complete(false);
+                        return;
+                    }
                     if (error == null) {
                         counters.accepted(batch.records().size());
                         result.complete(true);

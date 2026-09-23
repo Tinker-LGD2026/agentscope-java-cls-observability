@@ -22,6 +22,9 @@ final class InvocationState {
     private final String entryType;
     private final ConcurrentHashMap<String, AtomicInteger> rounds = new ConcurrentHashMap<>();
     private volatile @Nullable Span entrySpan;
+    private volatile @Nullable InvocationLease lease;
+    private volatile @Nullable ControlEventTracker controlTracker;
+    private volatile @Nullable String resumeFromTurnId;
 
     InvocationState(
             String sessionId,
@@ -64,6 +67,27 @@ final class InvocationState {
 
     void bindEntrySpan(Span value) {
         entrySpan = value;
+    }
+
+    void bindControlPlane(InvocationLease newLease, ControlEventTracker tracker) {
+        lease = newLease;
+        controlTracker = tracker;
+    }
+
+    @Nullable InvocationLease lease() {
+        return lease;
+    }
+
+    @Nullable ControlEventTracker controlTracker() {
+        return controlTracker;
+    }
+
+    void resumeFromTurnId(@Nullable String value) {
+        resumeFromTurnId = value;
+    }
+
+    @Nullable String resumeFromTurnId() {
+        return resumeFromTurnId;
     }
 
     void recordProvider(String provider) {

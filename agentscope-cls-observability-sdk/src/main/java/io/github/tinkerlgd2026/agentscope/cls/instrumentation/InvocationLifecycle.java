@@ -24,6 +24,8 @@ final class InvocationLifecycle {
         FINISHED
     }
 
+    private final String generationId =
+            java.util.UUID.randomUUID().toString().replace("-", "");
     private final Object registrationLock = new Object();
     private final AtomicReference<State> state = new AtomicReference<>(State.OPEN);
     private final AtomicReference<TerminalOutcome> terminalOutcome = new AtomicReference<>();
@@ -32,6 +34,10 @@ final class InvocationLifecycle {
     private final List<Span> stepSpans = new CopyOnWriteArrayList<>();
     private final List<Span> agentSpans = new CopyOnWriteArrayList<>();
     private final AtomicReference<Span> entrySpan = new AtomicReference<>();
+
+    String generationId() {
+        return generationId;
+    }
 
     State state() {
         return state.get();

@@ -13,7 +13,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Deterministic single-threaded scheduler for tests: tasks run only when advanced. */
-final class ManualScheduledExecutorService extends AbstractExecutorService
+public final class ManualScheduledExecutorService extends AbstractExecutorService
         implements ScheduledExecutorService {
     private final PriorityQueue<ManualTask> tasks = new PriorityQueue<>();
     private final List<RuntimeException> taskFailures = new ArrayList<>();
@@ -47,20 +47,20 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
         enqueue(command, 0, -1);
     }
 
-    void advance(Duration duration) {
+    public void advance(Duration duration) {
         nowNanos += duration.toNanos();
         runDue();
     }
 
-    int runPending() {
+    public int runPending() {
         return runDue();
     }
 
-    int pendingCount() {
+    public int pendingCount() {
         return tasks.size();
     }
 
-    void assertNoTaskFailures() {
+    public void assertNoTaskFailures() {
         if (!taskFailures.isEmpty()) {
             throw new AssertionError("scheduled task failed", taskFailures.get(0));
         }
@@ -203,7 +203,7 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
         }
     }
 
-    static ManualScheduledExecutorService create() {
+    public static ManualScheduledExecutorService create() {
         return new ManualScheduledExecutorService();
     }
 

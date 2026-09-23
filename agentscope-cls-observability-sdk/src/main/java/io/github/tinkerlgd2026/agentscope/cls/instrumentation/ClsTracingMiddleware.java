@@ -22,6 +22,7 @@ import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.middleware.ModelCallInput;
 import io.agentscope.core.middleware.ReasoningInput;
 import io.github.tinkerlgd2026.agentscope.cls.ClsInvocationContext;
+import io.github.tinkerlgd2026.agentscope.cls.ClsResumeContext;
 import io.github.tinkerlgd2026.agentscope.cls.internal.CaptureMemoryPool;
 import io.github.tinkerlgd2026.agentscope.cls.internal.JsonSupport;
 import io.github.tinkerlgd2026.agentscope.cls.internal.IdentityNormalizer;
@@ -102,6 +103,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     private final BooleanSupplier active;
     private final TelemetryCounters counters;
     private final boolean reactorContextHookEnabled;
+    private java.time.Duration hitlWaitTimeout = java.time.Duration.ofMinutes(10);
+    private volatile java.util.concurrent.ScheduledExecutorService controlScheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicLong lastWarningNanos = new AtomicLong(Long.MIN_VALUE);
 
@@ -187,6 +190,37 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     public ClsTracingMiddleware(
             Tracer tracer,
             ContentSanitizer contentSanitizer,
+            BooleanSupplier active,
+            TelemetryCounters counters,
+            ObjectMapper objectMapper,
+            boolean reactorContextHookEnabled,
+            java.time.Duration hitlWaitTimeout) {
+        this(
+                tracer,
+                contentSanitizer,
+                new MessageCapturePolicy(
+                        objectMapper,
+                        contentSanitizer.mode(),
+                        ContentCaptureMode.OFF,
+                        contentSanitizer.maxBytes()),
+                contentSanitizer.mode(),
+                ContentCaptureMode.OFF,
+                ContentCaptureMode.OFF,
+                Math.min(4096, contentSanitizer.maxBytes()),
+                contentSanitizer.maxBytes(),
+                new CaptureMemoryPool(
+                        Math.max(contentSanitizer.maxBytes(), 8L * 1024 * 1024)),
+                contentSanitizer.maxBytes(),
+                active,
+                counters,
+                objectMapper,
+                reactorContextHookEnabled,
+                hitlWaitTimeout);
+    }
+
+    public ClsTracingMiddleware(
+            Tracer tracer,
+            ContentSanitizer contentSanitizer,
             MessageCapturePolicy messageCapturePolicy,
             ContentCaptureMode contentCaptureMode,
             ContentCaptureMode reasoningCaptureMode,
@@ -199,6 +233,40 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             TelemetryCounters counters,
             ObjectMapper objectMapper,
             boolean reactorContextHookEnabled) {
+        this(
+                tracer,
+                contentSanitizer,
+                messageCapturePolicy,
+                contentCaptureMode,
+                reasoningCaptureMode,
+                providerPayloadCaptureMode,
+                truncatePreviewBytes,
+                maxContentBytes,
+                captureMemoryPool,
+                maxInvocationCaptureMemoryBytes,
+                active,
+                counters,
+                objectMapper,
+                reactorContextHookEnabled,
+                Duration.ofMinutes(10));
+    }
+
+    public ClsTracingMiddleware(
+            Tracer tracer,
+            ContentSanitizer contentSanitizer,
+            MessageCapturePolicy messageCapturePolicy,
+            ContentCaptureMode contentCaptureMode,
+            ContentCaptureMode reasoningCaptureMode,
+            ContentCaptureMode providerPayloadCaptureMode,
+            int truncatePreviewBytes,
+            int maxContentBytes,
+            CaptureMemoryPool captureMemoryPool,
+            long maxInvocationCaptureMemoryBytes,
+            BooleanSupplier active,
+            TelemetryCounters counters,
+            ObjectMapper objectMapper,
+            boolean reactorContextHookEnabled,
+            java.time.Duration hitlWaitTimeout) {
         if (tracer == null
                 || contentSanitizer == null
                 || messageCapturePolicy == null
@@ -237,6 +305,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 objectMapper.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
         this.messageConverter = new AgentScopeMessageConverter();
         this.reactorContextHookEnabled = reactorContextHookEnabled;
+        this.hitlWaitTimeout =
+                Objects.requireNonNull(hitlWaitTimeout, "hitlWaitTimeout");
         if (reactorContextHookEnabled) {
             acquireReactorHook();
         }
@@ -245,6 +315,10 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
     @Override
     public void close() {
         closed.set(true);
+        java.util.concurrent.ScheduledExecutorService scheduler = controlScheduler;
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
     }
 
     @Override
@@ -724,6 +798,14 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
         }
         Context spanContext = agentSpan.storeInContext(Objects.requireNonNull(agentParent));
         Span rootEntry = entry;
+        if (existing == null) {
+            ClsResumeContext resume = runtimeContext.get(ClsResumeContext.class);
+            if (resume != null) {
+                state.resumeFromTurnId(resume.resumeFromTurnId());
+                entry.setAttribute(
+                        ClsFields.TURN_RESUME_FROM_TURN_ID, resume.resumeFromTurnId());
+            }
+        }
         Flux<AgentEvent> downstream;
         try {
             downstream = next.apply(input);
@@ -738,6 +820,8 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             return Flux.error(exception);
         }
         AtomicBoolean ended = new AtomicBoolean();
+        ControlEventTracker controlTracker =
+                controlTracker(state, agentFrame, agentSpan, rootEntry, ended);
         Flux<AgentEvent> observed =
                 downstream
                         .doOnNext(
@@ -746,44 +830,99 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                                                 () ->
                                                         captureAgentResult(
                                                                 agentSpan, rootEntry, event)))
+                        .doOnNext(
+                                event ->
+                                        quietly(
+                                                () ->
+                                                        routeControlEvent(
+                                                                controlTracker,
+                                                                agentFrame,
+                                                                event)))
                         .doOnComplete(
                                 () ->
                                         quietly(
                                                 () -> {
                                                     finishOpenStep(agentFrame, "stop", null);
-                                                    endAgentTree(
-                                                            ended,
-                                                            agentSpan,
-                                                            rootEntry,
-                                                            agentFrame,
-                                                            null,
-                                                            false);
+                                                    if (rootEntry != null && controlTracker != null) {
+                                                        ControlEventTracker.TerminalResolution
+                                                                resolution =
+                                                                        controlTracker
+                                                                                .resolveOnComplete();
+                                                        controlTracker.cancelAll();
+                                                        endAgentTreeOutcome(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                resolution.outcome(),
+                                                                resolution.completed(),
+                                                                null,
+                                                                controlTracker);
+                                                    } else {
+                                                        endAgentTree(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                null,
+                                                                false);
+                                                    }
                                                 }))
                         .doOnError(
                                 error ->
                                         quietly(
                                                 () -> {
                                                     finishOpenStep(agentFrame, "error", error);
-                                                    endAgentTree(
-                                                            ended,
-                                                            agentSpan,
-                                                            rootEntry,
-                                                            agentFrame,
-                                                            error,
-                                                            false);
+                                                    if (rootEntry != null && controlTracker != null) {
+                                                        controlTracker.cancelAll();
+                                                        endAgentTreeOutcome(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                TerminalOutcome.ERROR,
+                                                                controlTracker
+                                                                        .resolveOnComplete()
+                                                                        .completed(),
+                                                                error,
+                                                                controlTracker);
+                                                    } else {
+                                                        endAgentTree(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                error,
+                                                                false);
+                                                    }
                                                 }))
                         .doOnCancel(
                                 () ->
                                         quietly(
                                                 () -> {
                                                     finishOpenStep(agentFrame, "cancelled", null);
-                                                    endAgentTree(
-                                                            ended,
-                                                            agentSpan,
-                                                            rootEntry,
-                                                            agentFrame,
-                                                            null,
-                                                            true);
+                                                    if (rootEntry != null && controlTracker != null) {
+                                                        controlTracker.cancelAll();
+                                                        endAgentTreeOutcome(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                TerminalOutcome.CANCELLED,
+                                                                controlTracker
+                                                                        .resolveOnComplete()
+                                                                        .completed(),
+                                                                null,
+                                                                controlTracker);
+                                                    } else {
+                                                        endAgentTree(
+                                                                ended,
+                                                                agentSpan,
+                                                                rootEntry,
+                                                                agentFrame,
+                                                                null,
+                                                                true);
+                                                    }
                                                 }));
         return propagate(observed, spanContext)
                 .contextWrite(
@@ -1205,6 +1344,183 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                 step.finishSuccess(reason);
             } else {
                 step.finishError(reason, error);
+            }
+        }
+    }
+
+    private ControlEventTracker controlTracker(
+            InvocationState state,
+            InvocationState.AgentFrame agentFrame,
+            Span agentSpan,
+            @Nullable Span rootEntry,
+            AtomicBoolean ended) {
+        ControlEventTracker existing = state.controlTracker();
+        if (existing != null) {
+            return existing;
+        }
+        InvocationLifecycle lifecycle = new InvocationLifecycle();
+        InvocationLease lease = new InvocationLease(lifecycle);
+        ControlEventTracker tracker =
+                new ControlEventTracker(
+                        new ControlScheduler(controlScheduler()),
+                        hitlWaitTimeout,
+                        lease,
+                        lifecycle,
+                        (outcome, resultObserved) ->
+                                quietly(
+                                        () -> {
+                                            finishOpenStep(
+                                                    agentFrame, outcome.finishReason(), null);
+                                            endAgentTreeOutcome(
+                                                    ended,
+                                                    agentSpan,
+                                                    rootEntry,
+                                                    agentFrame,
+                                                    outcome,
+                                                    resultObserved,
+                                                    null,
+                                                    state.controlTracker());
+                                        }),
+                        1024,
+                        System::nanoTime);
+        state.bindControlPlane(lease, tracker);
+        return tracker;
+    }
+
+    private java.util.concurrent.ScheduledExecutorService controlScheduler() {
+        java.util.concurrent.ScheduledExecutorService current = controlScheduler;
+        if (current == null) {
+            synchronized (this) {
+                current = controlScheduler;
+                if (current == null) {
+                    current =
+                            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                                    runnable -> {
+                                        Thread thread =
+                                                new Thread(
+                                                        runnable,
+                                                        "agentscope-cls-control");
+                                        thread.setDaemon(true);
+                                        return thread;
+                                    });
+                    controlScheduler = current;
+                }
+            }
+        }
+        return current;
+    }
+
+    private static void routeControlEvent(
+            ControlEventTracker tracker,
+            InvocationState.AgentFrame agentFrame,
+            AgentEvent event) {
+        if (event instanceof AgentResultEvent) {
+            tracker.onAgentResult();
+            return;
+        }
+        if (event instanceof io.agentscope.core.event.RequireUserConfirmEvent require) {
+            tracker.onWait(
+                    ControlRecord.Kind.USER_CONFIRM,
+                    agentFrame.agentId(),
+                    require.getReplyId(),
+                    toolCallIds(require.getToolCalls()));
+        } else if (event instanceof io.agentscope.core.event.UserConfirmResultEvent result) {
+            tracker.onResult(ControlRecord.Kind.USER_CONFIRM, result.getReplyId());
+        } else if (event
+                instanceof io.agentscope.core.event.RequireExternalExecutionEvent external) {
+            tracker.onWait(
+                    ControlRecord.Kind.EXTERNAL_EXECUTION,
+                    agentFrame.agentId(),
+                    external.getReplyId(),
+                    toolCallIds(external.getToolCalls()));
+        } else if (event
+                instanceof io.agentscope.core.event.ExternalExecutionResultEvent externalResult) {
+            tracker.onResult(
+                    ControlRecord.Kind.EXTERNAL_EXECUTION, externalResult.getReplyId());
+        } else if (event instanceof io.agentscope.core.event.AllToolsDeniedEvent) {
+            tracker.onControlOutcome(TerminalOutcome.DENIED);
+        } else if (event instanceof io.agentscope.core.event.ExceedMaxItersEvent) {
+            tracker.onControlOutcome(TerminalOutcome.MAX_ITERS);
+        } else if (event instanceof io.agentscope.core.event.RequestStopEvent) {
+            tracker.onControlOutcome(TerminalOutcome.INTERRUPTED);
+        }
+    }
+
+    private static List<String> toolCallIds(
+            List<io.agentscope.core.message.ToolUseBlock> toolCalls) {
+        if (toolCalls == null) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>(toolCalls.size());
+        for (io.agentscope.core.message.ToolUseBlock call : toolCalls) {
+            if (call != null && call.getId() != null) {
+                ids.add(call.getId());
+            }
+        }
+        return List.copyOf(ids);
+    }
+
+    private void endAgentTreeOutcome(
+            AtomicBoolean ended,
+            Span agent,
+            @Nullable Span entry,
+            InvocationState.AgentFrame agentFrame,
+            TerminalOutcome outcome,
+            boolean resultObserved,
+            @Nullable Throwable error,
+            @Nullable ControlEventTracker tracker) {
+        if (!ended.compareAndSet(false, true)) {
+            return;
+        }
+        applyTurnTerminal(agent, entry, outcome, resultObserved, tracker);
+        finishSpan(
+                agent,
+                () -> {
+                    try {
+                        agentFrame.applyTotals(agent);
+                    } finally {
+                        applyOutcomeStatus(agent, outcome, error);
+                    }
+                });
+        if (entry != null) {
+            finishSpan(entry, () -> applyOutcomeStatus(entry, outcome, error));
+        }
+    }
+
+    private void applyTurnTerminal(
+            Span agent,
+            @Nullable Span entry,
+            TerminalOutcome outcome,
+            boolean resultObserved,
+            @Nullable ControlEventTracker tracker) {
+        for (Span span : entry == null ? new Span[] {agent} : new Span[] {agent, entry}) {
+            span.setAttribute(ClsFields.TURN_COMPLETED, resultObserved);
+            span.setAttribute(ClsFields.TURN_FINISH_REASON, outcome.finishReason());
+            span.setAttribute(ClsFields.INCOMPLETE, outcome.incomplete());
+            if (tracker != null) {
+                span.setAttribute(ClsFields.HITL_WAIT_COUNT, tracker.waitCount());
+                span.setAttribute(
+                        ClsFields.HITL_TOTAL_WAIT_MS, tracker.totalWaitNanos() / 1_000_000L);
+            }
+        }
+    }
+
+    private static void applyOutcomeStatus(
+            Span span, TerminalOutcome outcome, @Nullable Throwable error) {
+        switch (outcome.statusCode()) {
+            case OK -> span.setStatus(StatusCode.OK);
+            case UNSET -> span.setStatus(StatusCode.UNSET);
+            case ERROR -> {
+                String description = outcome.statusDescription(error);
+                span.setStatus(StatusCode.ERROR, description);
+                span.setAttribute("error.type", description);
+                if (outcome == TerminalOutcome.ERROR && error != null) {
+                    span.addEvent(
+                            "exception",
+                            Attributes.builder()
+                                    .put("exception.type", error.getClass().getName())
+                                    .build());
+                }
             }
         }
     }

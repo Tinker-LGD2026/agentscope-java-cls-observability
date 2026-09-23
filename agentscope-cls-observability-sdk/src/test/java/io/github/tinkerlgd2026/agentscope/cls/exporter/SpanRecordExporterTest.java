@@ -93,6 +93,37 @@ class SpanRecordExporterTest {
         assertThat(pool.usedBytes()).isZero();
     }
 
+    @Test
+    void nullStageFromMisbehavingSinkReleasesReservation() {
+        CaptureMemoryPool pool = new CaptureMemoryPool(1 << 20);
+        EncodedSpanQueue queue = new EncodedSpanQueue(pool, 8);
+        queue.offer(record("a"));
+        TelemetryCounters counters = new TelemetryCounters();
+        SpanSink nullStage =
+                new SpanSink() {
+                    @Override
+                    public CompletionStage<Void> export(List<ClsSpanRecord> records) {
+                        return null;
+                    }
+
+                    @Override
+                    public CompletionStage<Boolean> flush(Duration timeout) {
+                        return CompletableFuture.completedFuture(true);
+                    }
+
+                    @Override
+                    public void close() {}
+                };
+        SpanRecordExporter exporter = new SpanRecordExporter(nullStage, counters);
+
+        Boolean result =
+                exporter.export(queue.pollBatch(8, Long.MAX_VALUE)).toCompletableFuture().join();
+
+        assertThat(result).isFalse();
+        assertThat(counters.snapshot().exportFailures()).isEqualTo(1);
+        assertThat(pool.usedBytes()).isZero();
+    }
+
     private static ClsSpanRecord record(String marker) {
         return new ClsSpanRecord(
                 "0123456789abcdef0123456789abcdef",

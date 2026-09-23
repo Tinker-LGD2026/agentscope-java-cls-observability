@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 final class ManualScheduledExecutorService extends AbstractExecutorService
         implements ScheduledExecutorService {
     private final PriorityQueue<ManualTask> tasks = new PriorityQueue<>();
+    private final List<RuntimeException> taskFailures = new ArrayList<>();
     private long nowNanos;
     private boolean shutdown;
 
@@ -59,6 +60,12 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
         return tasks.size();
     }
 
+    void assertNoTaskFailures() {
+        if (!taskFailures.isEmpty()) {
+            throw new AssertionError("scheduled task failed", taskFailures.get(0));
+        }
+    }
+
     private int runDue() {
         int ran = 0;
         while (!tasks.isEmpty() && tasks.peek().triggerNanos <= nowNanos) {
@@ -69,8 +76,10 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
             ran++;
             try {
                 task.command.runUnchecked();
-            } catch (RuntimeException ignored) {
-                // Test tasks are expected to be self-contained.
+                task.done = true;
+            } catch (RuntimeException failure) {
+                task.done = true;
+                taskFailures.add(failure);
             }
             if (task.periodNanos >= 0 && !task.cancelled) {
                 task.triggerNanos = nowNanos + task.periodNanos;
@@ -139,7 +148,7 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
         }
     }
 
-    private static final class ManualTask
+    private final class ManualTask
             implements ScheduledFuture<Object>, Comparable<Delayed> {
         private final ManualCallable command;
         private final long periodNanos;
@@ -155,7 +164,7 @@ final class ManualScheduledExecutorService extends AbstractExecutorService
 
         @Override
         public long getDelay(TimeUnit unit) {
-            return 0;
+            return unit.convert(triggerNanos - nowNanos, TimeUnit.NANOSECONDS);
         }
 
         @Override

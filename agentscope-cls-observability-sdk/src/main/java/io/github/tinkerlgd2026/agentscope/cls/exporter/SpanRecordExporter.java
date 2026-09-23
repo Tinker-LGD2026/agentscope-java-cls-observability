@@ -26,10 +26,16 @@ public final class SpanRecordExporter implements AutoCloseable {
         CompletionStage<Void> stage;
         try {
             stage = sink.export(batch.records());
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | Error failure) {
             batch.close();
             counters.exportFailed(batch.records().size());
-            LOGGER.warn("CLS span export failed: {}", exception.getClass().getSimpleName());
+            LOGGER.warn("CLS span export failed: {}", failure.getClass().getSimpleName());
+            return CompletableFuture.completedFuture(false);
+        }
+        if (stage == null) {
+            batch.close();
+            counters.exportFailed(batch.records().size());
+            LOGGER.warn("CLS span export failed: sink returned no completion stage");
             return CompletableFuture.completedFuture(false);
         }
         CompletableFuture<Boolean> result = new CompletableFuture<>();

@@ -61,7 +61,7 @@ graph TD
 - Maven 3.9+
 - AgentScope Java 2.0.3
 
-当前首个公开版本为 `0.1.0`。尚未发布到 Maven Central 时，先在 SDK 源码目录执行：
+当前最新发布版本为 `0.3.1`（GitHub Releases 提供 jar/sources/javadoc 与 SBOM）。尚未发布到 Maven Central 时，先在 SDK 源码目录执行：
 
 ```bash
 ./mvnw install -DskipTests
@@ -73,7 +73,7 @@ graph TD
 <dependency>
     <groupId>io.github.tinkerlgd2026</groupId>
     <artifactId>agentscope-cls-observability-sdk</artifactId>
-    <version>0.3.0-SNAPSHOT</version>
+    <version>0.3.1</version>
 </dependency>
 ```
 

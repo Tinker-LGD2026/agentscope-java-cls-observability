@@ -39,6 +39,14 @@ CLS_SECRET_KEY
 
 正常行为：每次顶层 `agent.call()` 是一个新 Turn 和新 Trace，相同 `sessionId` 将多个 Trace 聚合为一段会话。
 
+**异常情形（0.3.0 已修复于 0.3.1）**：如果同一 `gen_ai.turn.id` 下 `entry / invoke_agent / react round / chat`
+各自的 `traceID` 不同且 `parentSpanID` 全为空，说明 span 父子链接在创建时被外部改写。
+已确认的一个来源是阿里云 ARMS 5.1.x 探针的 AgentScope 2.0 埋点插件：探针的 OTel 桥接层会使
+SDK 放入 `Context` 的活跃父 Span 在取出时变成无效值，导致每个 Span 都被重建为新 Trace。
+0.3.1 起 SDK 改为以 `PropagatedSpan`（仅含不可变 SpanContext）传递父引用，规避该改写。
+若仍使用 0.3.0，规避方式：摘掉探针验证、在探针配置中关闭 AgentScope 插件，或升级探针到
+`5.2.0-genai` 专项版本（官方已修复部分 AgentScope 2.0 埋点不兼容问题）。
+
 ## 没有生成 Trace
 
 缺少 `sessionId` 或 `userId` 时，SDK 跳过遥测但继续业务。检查 `droppedSpans` 和调用处的 `RuntimeContext`。

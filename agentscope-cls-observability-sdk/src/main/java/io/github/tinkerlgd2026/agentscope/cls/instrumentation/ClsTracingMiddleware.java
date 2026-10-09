@@ -660,7 +660,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                     .lifecycle()
                     .registerStep(agentFrame.agentId(), pendingStep.stepId(), span);
         }
-        Context spanContext = span.storeInContext(Objects.requireNonNull(parent));
+        Context spanContext = storeParentReference(span, parent);
         pendingStep.bind(span, spanContext);
         agentFrame.currentStep(pendingStep);
         Flux<AgentEvent> downstream;
@@ -763,7 +763,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         contentCaptureMode,
                         reasoningCaptureMode,
                         maxContentBytes);
-        Context spanContext = span.storeInContext(Objects.requireNonNull(parent));
+        Context spanContext = storeParentReference(span, parent);
         Flux<AgentEvent> downstream;
         try {
             downstream = next.apply(input);
@@ -1020,7 +1020,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                             .setAttribute("observed_time_unix_nano", Long.toString(epochNanos()))
                             .startSpan();
             state.bindEntrySpan(entry);
-            agentParent = entry.storeInContext(Objects.requireNonNull(Context.root()));
+            agentParent = storeParentReference(entry, Context.root());
         }
         Span agentSpan =
                 common(
@@ -1043,7 +1043,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
             }
             lifecycle.registerAgent(agentFrame.agentId(), agentSpan);
         }
-        Context spanContext = agentSpan.storeInContext(agentParent);
+        Context spanContext = storeParentReference(agentSpan, agentParent);
         if (existing == null && lifecycle != null) {
             generation =
                     new InvocationState.Generation(
@@ -1470,7 +1470,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         .setAttribute(ClsFields.TURN_RESUME_FROM_TURN_ID, old.turnId())
                         .startSpan();
         rotatedLifecycle.registerEntry(newEntry);
-        Context entryContext = newEntry.storeInContext(Objects.requireNonNull(Context.root()));
+        Context entryContext = storeParentReference(newEntry, Context.root());
         Span newAgentSpan =
                 common(
                                 tracer.spanBuilder("invoke_agent " + frame.agentName())
@@ -1491,7 +1491,7 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
                         newEntry,
                         newAgentSpan,
                         frame,
-                        newAgentSpan.storeInContext(entryContext)));
+                        storeParentReference(newAgentSpan, entryContext)));
     }
 
     private void capture(Span span, String key, Object value) {
@@ -2065,6 +2065,20 @@ public final class ClsTracingMiddleware implements MiddlewareBase, AutoCloseable
      * without installing a process wide Reactor hook. BRIDGE/LEGACY_HOOK additionally side load
      * the context into the OpenTelemetry operator so nested auto instrumentation can attach.
      */
+    /**
+     * Stores a span reference for later parent resolution. The live recording span is first
+     * wrapped into a non-recording {@code PropagatedSpan}: APM javaagents built on the OTel
+     * javaagent (for example ARMS 5.1.x with the AgentScope plugin) instrument application
+     * Span/Context interactions and can invalidate a live span after it is retrieved back
+     * from the Context, silently re-rooting the child span onto a fresh trace. The wrapper
+     * carries only the immutable SpanContext and is not instrumented. Callers keep their own
+     * span references for {@code end()}; contexts produced here are used only as parents.
+     */
+    static Context storeParentReference(Span span, Context parent) {
+        return Span.wrap(Objects.requireNonNull(span).getSpanContext())
+                .storeInContext(Objects.requireNonNull(parent));
+    }
+
     private Flux<AgentEvent> propagate(Flux<AgentEvent> flux, Context spanContext) {
         return contextPropagation.apply(flux, spanContext, contextKeys.otelContextKey());
     }

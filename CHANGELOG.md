@@ -4,6 +4,17 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-09
+
+### Fixed
+
+- Parent contexts now carry a non-recording `PropagatedSpan` instead of the live recording
+  span: APM javaagents built on the OpenTelemetry javaagent (confirmed with Aliyun ARMS
+  5.1.x AgentScope instrumentation) could invalidate a live span retrieved back from the
+  Reactor/OTel Context, silently re-rooting `invoke_agent`/step/chat spans onto fresh traces.
+  Span trees keep one trace under such agents; behavior in plain JVMs is unchanged.
+- Docs: troubleshooting entry for the multi-trace symptom under APM javaagent coexistence.
+
 ## [0.3.0] - 2026-09-23
 
 ### Added

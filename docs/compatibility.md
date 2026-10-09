@@ -43,9 +43,9 @@ OpenAI-compatible、Anthropic、Gemini 等模型是否产生完整 Thinking 事�
 | AgentScope Core | 2.0.3，`provided` |
 | OpenTelemetry SDK | 1.62.0 |
 | OpenTelemetry Reactor instrumentation | 2.28.0-alpha |
-| Jackson | 2.21.5 |
+| Jackson | 2.21.7 |
 | Tencent CLS Java SDK | 1.0.17 |
-| lz4-java maintained fork | 1.11.1 |
+| lz4-java maintained fork | 1.11.4 |
 | SLF4J API | 2.0.17 |
 
 `agentscope-core` 是 `provided`，客户应用必须显式提供 AgentScope 运行时。公开版本不承诺任意版本替换都兼容。

@@ -6,7 +6,7 @@
 
     <groupId>io.github.tinkerlgd2026</groupId>
     <artifactId>agentscope-cls-observability-parent</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
     <packaging>pom</packaging>
 
     <name>AgentScope Java CLS Observability</name>
@@ -48,9 +48,9 @@
         <agentscope.version>2.0.3</agentscope.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.instrumentation.version>2.28.0-alpha</opentelemetry.instrumentation.version>
-        <jackson.version>2.21.5</jackson.version>
+        <jackson.version>2.21.7</jackson.version>
         <cls.sdk.version>1.0.17</cls.sdk.version>
-        <lz4.version>1.11.1</lz4.version>
+        <lz4.version>1.11.4</lz4.version>
         <junit.version>6.0.2</junit.version>
         <assertj.version>3.27.7</assertj.version>
         <slf4j.version>2.0.17</slf4j.version>

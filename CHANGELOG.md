@@ -13,6 +13,8 @@ All notable changes are documented here. This project follows Semantic Versionin
   5.1.x AgentScope instrumentation) could invalidate a live span retrieved back from the
   Reactor/OTel Context, silently re-rooting `invoke_agent`/step/chat spans onto fresh traces.
   Span trees keep one trace under such agents; behavior in plain JVMs is unchanged.
+- Dependency bumps for newly published advisories: Jackson 2.21.5 -> 2.21.7 (7 GHSAs) and
+  lz4-java 1.11.1 -> 1.11.4 (5 GHSAs); OSV scans are clean again.
 - Docs: troubleshooting entry for the multi-trace symptom under APM javaagent coexistence.
 
 ## [0.3.0] - 2026-09-23

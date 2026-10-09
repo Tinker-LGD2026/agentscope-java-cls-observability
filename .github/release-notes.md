@@ -8,6 +8,8 @@
   进程中，放入 `Context` 的活跃父 Span 取出时被探针桥接层无效化，导致同一 Turn 的
   `invoke_agent` / `react round` / `chat` 被拆成多个独立 Trace（parentSpanID 全空）。
   修复后 Span 树在探针共存时保持单一 Trace；普通 JVM 行为不变。
+- 依赖升级：Jackson 2.21.5 → 2.21.7、lz4-java 1.11.1 → 1.11.4（覆盖 0.3.0 发布后新公开的
+  12 条 GHSA，OSV 扫描重新清零）。
 - 排障文档新增"APM 探针共存导致多 Trace"条目与规避指引。
 
 ### 已验证
